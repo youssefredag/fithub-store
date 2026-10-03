@@ -1,0 +1,42 @@
+
+.about {
+  background: linear-gradient(180deg, #fff 0%, #fffaf5 100%);
+}
+
+.about-content {
+  display: flex;
+  gap: 150px;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 80px;
+}
+
+.about-content img {
+  width: 480px;
+  max-width: 45%;
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+}
+
+.about-text {
+  max-width: 720px;
+}
+
+.about-text p {
+  color: #333333;
+  line-height: 1.8;
+  margin-bottom: 16px;
+  font-size: 1.05rem;
+}
+
+@media (max-width: 768px) {
+  .about-content {
+    flex-direction: column;
+    padding: 30px 20px;
+  }
+
+  .about-content img {
+    max-width: 100%;
+    width: 100%;
+  }
+}

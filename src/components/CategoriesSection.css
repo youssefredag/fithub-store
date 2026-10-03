@@ -1,0 +1,65 @@
+
+.categories {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 40px 80px;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 20px;
+}
+
+.category-card {
+    display: flex;
+    padding: 20px;
+    background: linear-gradient(135deg, #ffffff, #f9f9f9);
+    border: 2px solid var(--borderColor);
+    border-radius: var(--lg-radius);
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--textColor);
+    cursor: pointer;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.category-card::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(255, 107, 53, 0.3), transparent);
+    transform: scale(0);
+    transition: transform 0.4s ease;
+}
+
+.category-card:hover {
+    border-color: var(--brandColor);
+    color: var(--brandColor);
+    background: linear-gradient(135deg, #fff5f0, #fffbf0);
+    box-shadow: 0 8px 20px rgba(255, 107, 53, 0.2);
+    transform: translateY(-5px);
+}
+
+.category-card:hover::before {
+    transform: scale(1);
+}
+
+.category-card span {
+    position: relative;
+    z-index: 1;
+}
+
+.thrid-col {
+    grid-column: 3 span;
+}
+
+.thrid-row {
+    grid-row: 3 span;
+}
