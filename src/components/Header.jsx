@@ -24,7 +24,6 @@ export default function Header() {
                     </Link>
                 </h1>
 
-                {}
                 <nav className="relative flex items-center gap-6">
                     <ul className="hidden md:flex items-center gap-6">
                         <li>

@@ -8,6 +8,7 @@ function ProductsSection() {
   const [products, setProducts] = useState([]);
   const [visableProducts, setVisableProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -16,6 +17,10 @@ function ProductsSection() {
       setProducts(catalog);
       setVisableProducts(catalog);
       setLoading(false);
+    }).catch((requestError) => {
+      if (!active) return;
+      setError(requestError.message || 'Could not load products.');
+      setLoading(false);
     });
     return () => { active = false; };
   }, [])
@@ -23,6 +28,7 @@ function ProductsSection() {
   return (
     <section className="products">
       <h2 className="center-title">Products</h2>
+      {error && <p className="form-error" role="alert">{error}</p>}
       <div>
         <SearchBar products={products} setVisableProducts={setVisableProducts} />
       </div>

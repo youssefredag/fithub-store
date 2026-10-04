@@ -1,28 +1,37 @@
 import { useEffect, useState } from 'react';
 import PropTypes from 'prop-types';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FaHeart, FaRegHeart, FaStar } from 'react-icons/fa';
 import { useCart } from '../context/CartContext';
-import { formatPrice, gymBrands, loadCategories, loadProduct, loadProducts, slugify } from '../services/catalog';
+import { apiRequest, jsonBody } from '../services/api';
+import { formatPrice, gymBrands, loadBrands, loadCategories, loadProduct, loadProducts, slugify } from '../services/catalog';
 
 function useCatalog() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [brands, setBrands] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
-    loadProducts().then(async (nextProducts) => {
-      const nextCategories = await loadCategories(nextProducts);
-      if (!active) return;
-      setProducts(nextProducts);
-      setCategories(nextCategories);
-      setLoading(false);
-    });
+    Promise.all([loadProducts(), loadCategories(), loadBrands()])
+      .then(([nextProducts, nextCategories, nextBrands]) => {
+        if (!active) return;
+        setProducts(nextProducts);
+        setCategories(nextCategories);
+        setBrands(nextBrands);
+        setLoading(false);
+      })
+      .catch((requestError) => {
+        if (!active) return;
+        setError(requestError.message || 'Could not load the catalog.');
+        setLoading(false);
+      });
     return () => { active = false; };
   }, []);
 
-  return { products, categories, loading };
+  return { products, categories, brands, loading, error };
 }
 
 function ProductTile({ product }) {
@@ -59,7 +68,7 @@ export function ProductGrid({ products, loading }) {
 }
 
 export function CatalogPage({ mode = 'products' }) {
-  const { products, categories, loading } = useCatalog();
+  const { products, categories, brands, loading, error } = useCatalog();
   const { brand, category } = useParams();
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('featured');
@@ -67,19 +76,19 @@ export function CatalogPage({ mode = 'products' }) {
   const detailSlug = brand || category;
 
   if (mode === 'brands' || mode === 'categories') {
-    const values = mode === 'brands'
-      ? [...new Set(products.map((product) => product.brand).filter(Boolean))]
-      : categories;
+    const values = mode === 'brands' ? brands : categories;
     return (
       <section className="shop-page">
         <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / Explore</p><h1>{mode === 'brands' ? 'Brands' : 'Categories'}</h1><p>{mode === 'brands' ? 'Makers currently stocked in the shop.' : 'Browse the equipment by type.'}</p></div>
         <div className="collection-grid">
           {loading && <p className="shop-empty">Loading collections...</p>}
+          {error && <p className="form-error" role="alert">{error}</p>}
           {values.map((value) => {
-            const to = `/${mode}/${slugify(value)}`;
-            const count = products.filter((product) => slugify(mode === 'brands' ? product.brand : product.category) === slugify(value)).length;
-            const description = mode === 'brands' ? gymBrands.find((brandEntry) => brandEntry.name === value)?.description : null;
-            return <Link className="collection-tile" key={value} to={to}><span>{mode === 'brands' ? 'BRAND' : 'CATEGORY'}</span><strong>{value}</strong>{description && <p>{description}</p>}<small>{count} {count === 1 ? 'item' : 'items'} <span aria-hidden="true">↗</span></small></Link>;
+            const name = value.name;
+            const to = `/${mode}/${slugify(name)}`;
+            const count = products.filter((product) => slugify(mode === 'brands' ? product.brand : product.category) === slugify(name)).length;
+            const description = mode === 'brands' ? gymBrands.find((brandEntry) => brandEntry.name === name)?.description : null;
+            return <Link className="collection-tile" key={value.id} to={to}><span>{mode === 'brands' ? 'BRAND' : 'CATEGORY'}</span><strong>{name}</strong>{description && <p>{description}</p>}<small>{count} {count === 1 ? 'item' : 'items'} <span aria-hidden="true">↗</span></small></Link>;
           })}
           {!values.length && !loading && <div className="shop-empty">{mode === 'brands' ? 'Brand names have not been added to the current product data.' : 'No categories are available.'} <Link to="/products">Browse equipment</Link></div>}
         </div>
@@ -101,6 +110,7 @@ export function CatalogPage({ mode = 'products' }) {
     <section className="shop-page">
       <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / {mode === 'products' ? 'Equipment' : mode === 'brand-detail' ? 'Brands' : 'Categories'}</p><h1>{mode === 'products' ? title : collectionTitle}</h1><p>{mode === 'products' ? 'Dumbbells, benches, racks, and the essentials for a home gym.' : mode === 'brand-detail' ? gymBrands.find((brandEntry) => slugify(brandEntry.name) === detailSlug)?.description || 'Products from this brand.' : 'Equipment available in this category.'}</p></div>
       <div className="catalog-toolbar"><label className="catalog-search"><span>Search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search equipment" /></label><label className="catalog-sort"><span>Sort</span><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="featured">Featured</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div>
+      {error && <p className="form-error" role="alert">{error}</p>}
       <ProductGrid products={visible} loading={loading} />
     </section>
   );
@@ -112,85 +122,151 @@ export function WishlistPage() {
 }
 
 export function AccountPage({ mode }) {
-  const { signIn, user } = useCart();
+  const { signIn, user, authReady } = useCart();
   const navigate = useNavigate();
+  const location = useLocation();
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [resetStep, setResetStep] = useState('email');
+  const [resetEmail, setResetEmail] = useState('');
 
   async function submit(event) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setNotice('');
     setError('');
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formElement);
     const email = String(form.get('email') || '').trim();
     const name = String(form.get('name') || '').trim();
-
-    if (mode === 'forgot') {
-      setNotice('Password reset is a demo flow; no email service is connected.');
-      return;
-    }
-    if (mode === 'change') {
-      setNotice('Password change is a demo flow; no authentication server is connected.');
-      return;
-    }
-    if (mode === 'register') {
-      const profile = { name, email };
-      signIn(profile);
-      localStorage.setItem('fithub-demo-account', JSON.stringify(profile));
-      navigate('/');
-      return;
-    }
-
-    const demoAccount = JSON.parse(localStorage.getItem('fithub-demo-account') || 'null');
-    if (demoAccount?.email.toLowerCase() === email.toLowerCase()) {
-      signIn(demoAccount);
-      navigate('/');
-      return;
-    }
+    setSubmitting(true);
 
     try {
-      const response = await fetch('https://dummyjson.com/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: String(form.get('email') || ''), password: String(form.get('password') || ''), expiresInMins: 30 }),
-      });
-      if (!response.ok) throw new Error('We could not sign in with those details. You can create a demo account here.');
-      const data = await response.json();
-      signIn({ name: `${data.firstName} ${data.lastName}`, email: data.email || email });
-      navigate('/');
+      if (mode === 'forgot') {
+        if (resetStep === 'email') {
+          await apiRequest('/auth/forgotPasswords', { method: 'POST', body: jsonBody({ email }) });
+          setResetEmail(email);
+          setResetStep('code');
+          setNotice('A reset code was requested. Check your email, then enter the code here.');
+        } else if (resetStep === 'code') {
+          await apiRequest('/auth/verifyResetCode', {
+            method: 'POST',
+            body: jsonBody({ resetCode: String(form.get('resetCode') || '').trim() }),
+          });
+          setResetStep('password');
+          setNotice('Reset code verified. Choose a new password.');
+        } else if (resetStep === 'password') {
+          await apiRequest('/auth/resetPassword', {
+            method: 'PUT',
+            body: jsonBody({ email: resetEmail, newPassword: String(form.get('newPassword') || '') }),
+          });
+          setResetStep('done');
+          setNotice('Your password was reset. You can now sign in.');
+        }
+        return;
+      }
+
+      if (mode === 'change') {
+        if (!user?.token) throw new Error('Please sign in to change your password.');
+        const password = String(form.get('password') || '');
+        const rePassword = String(form.get('rePassword') || '');
+        if (password !== rePassword) throw new Error('Passwords do not match.');
+        const result = await apiRequest('/users/changeMyPassword', {
+          method: 'PUT',
+          token: user?.token,
+          body: jsonBody({
+            currentPassword: String(form.get('currentPassword') || ''),
+            password: String(form.get('password') || ''),
+            rePassword: String(form.get('rePassword') || ''),
+          }),
+        });
+        const account = result?.data || result;
+        signIn({ ...(account.user || user), token: account.token || user.token });
+        setNotice('Your password was updated.');
+        formElement.reset();
+        return;
+      }
+
+      if (mode === 'register') {
+        const password = String(form.get('password') || '');
+        const rePassword = String(form.get('rePassword') || '');
+        if (password !== rePassword) throw new Error('Passwords do not match.');
+        const result = await apiRequest('/auth/signup', {
+          method: 'POST',
+          body: jsonBody({
+            name,
+            email,
+            password,
+            rePassword,
+            phone: String(form.get('phone') || '').trim(),
+          }),
+        });
+        let account = result?.data || result;
+        if (!account.token) {
+          const signInResult = await apiRequest('/auth/signin', {
+            method: 'POST',
+            body: jsonBody({ email, password }),
+          });
+          account = signInResult?.data || signInResult;
+        }
+        if (!account.token) throw new Error('Your account was created, but the server did not return a sign-in token. Please sign in.');
+        signIn({ ...(account.user || account), token: account.token });
+      } else {
+        const result = await apiRequest('/auth/signin', {
+          method: 'POST',
+          body: jsonBody({ email, password: String(form.get('password') || '') }),
+        });
+        const account = result?.data || result;
+        if (!account.token) throw new Error('The server did not return a sign-in token.');
+        signIn({ ...(account.user || account), token: account.token });
+      }
+      navigate(location.state?.from || '/');
     } catch (requestError) {
-      setError(requestError.message || 'Sign in is unavailable. Please try again.');
+      setError(requestError.message || 'The account request failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   }
 
   const title = mode === 'register' ? 'Create account' : mode === 'forgot' ? 'Reset password' : mode === 'change' ? 'Change password' : 'Welcome back';
+  const showEmail = mode === 'login' || mode === 'register' || (mode === 'forgot' && resetStep === 'email');
+  if (!authReady) return <section className="account-shell"><div className="account-panel"><p role="status">Checking your session...</p></div></section>;
+  if (mode === 'change' && !user?.token) {
+    return <section className="account-shell"><div className="account-panel"><p className="shop-eyebrow">FitHub / Account</p><h1>Sign in required</h1><p className="account-note">Sign in to change your account password.</p><Link className="button" to="/login">Sign in</Link></div></section>;
+  }
   return (
     <section className="account-shell">
-      <div className="account-panel"><p className="shop-eyebrow">FitHub / Account</p><h1>{title}</h1><p className="account-note">{mode === 'login' ? 'Enter your sign-in details.' : mode === 'register' ? 'Create a profile for this browser.' : mode === 'forgot' ? 'Request reset instructions for your demo profile.' : 'Update the password for your demo profile.'}</p>
+      <div className="account-panel"><p className="shop-eyebrow">FitHub / Account</p><h1>{title}</h1><p className="account-note">{mode === 'login' ? 'Sign in to manage your cart and orders.' : mode === 'register' ? 'Create an account to shop and manage your orders.' : mode === 'forgot' ? 'Follow the steps to reset your account password.' : 'Update the password for your account.'}</p>
         <form className="shop-form" onSubmit={submit}>
-          {mode === 'register' && <label>Full name<input name="name" autoComplete="name" required /></label>}
-          {mode !== 'change' && <label>{mode === 'login' ? 'Email or API username' : 'Email'}<input type={mode === 'login' ? 'text' : 'email'} name="email" autoComplete={mode === 'login' ? 'username' : 'email'} required /></label>}
-          {(mode === 'login' || mode === 'register') && <label>Password<input type="password" name="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength="6" required /></label>}
-          {mode === 'change' && <><label>Current password<input type="password" name="current" autoComplete="current-password" required /></label><label>New password<input type="password" name="password" autoComplete="new-password" minLength="6" required /></label></>}
+          {mode === 'register' && <label>Full name<input name="name" autoComplete="name" required disabled={submitting} /></label>}
+          {mode === 'register' && <label>Phone<input type="tel" name="phone" autoComplete="tel" required disabled={submitting} /></label>}
+          {showEmail && <label>Email<input type="email" name="email" autoComplete="email" required disabled={submitting} /></label>}
+          {(mode === 'login' || mode === 'register') && <label>Password<input type="password" name="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength="6" required disabled={submitting} /></label>}
+          {mode === 'register' && <label>Confirm password<input type="password" name="rePassword" autoComplete="new-password" minLength="6" required disabled={submitting} /></label>}
+          {mode === 'change' && <><label>Current password<input type="password" name="currentPassword" autoComplete="current-password" required disabled={submitting} /></label><label>New password<input type="password" name="password" autoComplete="new-password" minLength="6" required disabled={submitting} /></label><label>Confirm new password<input type="password" name="rePassword" autoComplete="new-password" minLength="6" required disabled={submitting} /></label></>}
+          {mode === 'forgot' && resetStep === 'code' && <label>Reset code<input name="resetCode" inputMode="numeric" autoComplete="one-time-code" required disabled={submitting} /></label>}
+          {mode === 'forgot' && resetStep === 'password' && <label>New password<input type="password" name="newPassword" autoComplete="new-password" minLength="6" required disabled={submitting} /></label>}
           {notice && <p className="form-message" role="status">{notice}</p>}{error && <p className="form-error" role="alert">{error}</p>}
-          <button className="button" type="submit">{mode === 'register' ? 'Create account' : mode === 'forgot' ? 'Send reset instructions' : mode === 'change' ? 'Update password' : 'Sign in'}</button>
+          {!(mode === 'forgot' && resetStep === 'done') && <button className="button" type="submit" disabled={submitting}>{submitting ? 'Please wait...' : mode === 'register' ? 'Create account' : mode === 'forgot' ? resetStep === 'email' ? 'Send reset code' : resetStep === 'code' ? 'Verify code' : 'Reset password' : mode === 'change' ? 'Update password' : 'Sign in'}</button>}
         </form>
         <nav className="account-links">{mode === 'login' && <><Link to="/register">Create an account</Link><Link to="/forgot-password">Forgot password?</Link></>}{mode === 'register' && <Link to="/login">Already registered? Sign in</Link>}{mode === 'forgot' && <Link to="/login">Back to sign in</Link>}{mode === 'change' && <span>{user?.email}</span>}</nav>
-        <p className="demo-disclaimer">Use test credentials only. Password changes and reset emails are not connected.</p>
+        {mode === 'forgot' && <p className="demo-disclaimer">Reset instructions are sent by the Route API to the email address on your account.</p>}
       </div>
     </section>
   );
 }
 
 export function AddressesPage() {
-  const { addresses, saveAddress, removeAddress } = useCart();
+  const { addresses, saveAddress, removeAddress, user } = useCart();
   const [notice, setNotice] = useState('');
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    saveAddress(Object.fromEntries(formData.entries()));
-    event.currentTarget.reset();
-    setNotice('Address saved on this device.');
+    const formElement = event.currentTarget;
+    const formData = new FormData(formElement);
+    const saved = await saveAddress(Object.fromEntries(formData.entries()));
+    if (!saved) return;
+    formElement.reset();
+    setNotice(user?.token ? 'Address saved to your account.' : 'Address saved on this device.');
   }
   return (
     <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Delivery</p><h1>Addresses</h1><p>Manage the places where your equipment can be delivered.</p><nav className="account-links"><Link to="/orders">View orders</Link><Link to="/change-password">Change password</Link></nav></div>
@@ -209,13 +285,17 @@ export function CheckoutPage() {
   const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
   if (!items.length) return <section className="shop-page shop-empty-page"><h1>Your cart is empty</h1><Link className="button" to="/products">Browse equipment</Link></section>;
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    const address = addresses.find((saved) => saved.id === data.get('saved-address')) || Object.fromEntries(['full-name', 'phone', 'street-address', 'city', 'postal-code'].map((key) => [key, data.get(key)]));
-    if (!address.id) saveAddress(address);
-    placeOrder({ address, paymentMethod: payment });
-    navigate('/orders', { state: { placed: true } });
+    let address = addresses.find((saved) => saved.id === data.get('saved-address')) || Object.fromEntries(['full-name', 'phone', 'street-address', 'city', 'postal-code'].map((key) => [key, data.get(key)]));
+    if (!address.id) {
+      const saved = await saveAddress(address);
+      if (!saved) return;
+      if (saved !== true) address = saved;
+    }
+    const order = await placeOrder({ address, paymentMethod: payment });
+    if (order && !order.redirecting) navigate('/orders', { state: { placed: true } });
   }
 
   return (
@@ -242,15 +322,24 @@ export function ProductDetailsPage() {
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
   const [added, setAdded] = useState(false);
+  const [error, setError] = useState('');
   useEffect(() => {
     let active = true;
     setLoading(true);
-    loadProduct(id).then((data) => {
-      if (active) { setProduct(data); setLoading(false); }
-    });
+    setError('');
+    loadProduct(id)
+      .then((data) => {
+        if (active) { setProduct(data); setLoading(false); }
+      })
+      .catch((requestError) => {
+        if (!active) return;
+        setError(requestError.message || 'Could not load this product.');
+        setLoading(false);
+      });
     return () => { active = false; };
   }, [id]);
   if (loading) return <div className="shop-empty detail-loading">Loading product...</div>;
+  if (error) return <section className="shop-page shop-empty-page"><p className="form-error" role="alert">{error}</p><Link className="button" to="/products">Back to products</Link></section>;
   if (!product) return <section className="shop-page shop-empty-page"><h1>Product not found</h1><Link className="button" to="/products">Back to equipment</Link></section>;
   const saved = wishlist.some((item) => item.id === product.id);
   const image = product.image || product.images?.[0];

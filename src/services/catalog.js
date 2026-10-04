@@ -1,45 +1,56 @@
-import { gymProducts, gymCategories, gymBrands } from '../data/gymProducts';
+import { apiRequest } from './api';
+import { gymBrands, gymCategories, gymProducts } from '../data/gymProducts';
 
-const API_ROOT = 'https://dummyjson.com';
+export { gymBrands };
 
-function normalizeApiProduct(product) {
-  return {
-    ...product,
-    id: `api-${product.id}`,
-    apiId: product.id,
-    brand: product.brand || '',
-    image: product.thumbnail || product.images?.[0] || '',
-    images: product.images?.length ? product.images : [product.thumbnail].filter(Boolean),
-  };
-}
-
-export const localProducts = gymProducts.map((product) => ({
+const localProducts = gymProducts.map((product) => ({
   ...product,
   image: product.images[0],
 }));
 
-export { gymBrands };
+function normalizeProduct(product) {
+  const category = product.category?.name || product.category || '';
+  const brand = product.brand?.name || product.brand || '';
+  return {
+    ...product,
+    id: String(product._id || product.id),
+    category,
+    categoryId: product.category?._id || '',
+    brand,
+    brandId: product.brand?._id || '',
+    rating: product.ratingsAverage ?? product.rating ?? 0,
+    image: product.imageCover || product.thumbnail || product.images?.[0] || '',
+    images: product.images?.length ? product.images : [product.imageCover || product.thumbnail].filter(Boolean),
+  };
+}
 
 export async function loadProducts() {
   return localProducts;
 }
 
 export async function loadProduct(id) {
-  const local = localProducts.find((product) => String(product.id) === String(id));
-  if (local) return local;
-  const apiId = String(id).replace(/^api-/, '');
-  if (!/^\d+$/.test(apiId)) return null;
-  try {
-    const response = await fetch(`${API_ROOT}/products/${apiId}`);
-    if (!response.ok) return null;
-    return normalizeApiProduct(await response.json());
-  } catch {
-    return null;
-  }
+  const localProduct = localProducts.find((product) => String(product.id) === String(id));
+  if (localProduct) return localProduct;
+
+  const result = await apiRequest(`/products/${encodeURIComponent(String(id).replace(/^api-/, ''))}`);
+  const product = result?.data?.product || result?.data;
+  return product ? normalizeProduct(product) : null;
 }
 
 export async function loadCategories() {
-  return gymCategories.filter((category) => category !== 'All');
+  return gymCategories.filter((category) => category !== 'All').map((name) => ({
+    id: name,
+    name,
+    slug: name.toLowerCase().replaceAll(' ', '-'),
+  }));
+}
+
+export async function loadBrands() {
+  return gymBrands.map((brand) => ({
+    ...brand,
+    id: brand.name,
+    slug: brand.name.toLowerCase().replaceAll(' ', '-'),
+  }));
 }
 
 export const formatPrice = (price) => `$${Number(price || 0).toFixed(2)}`;

@@ -167,6 +167,8 @@ main.pt-20 { padding-top: 76px; }
 .account-links a { color: var(--shop-deep-green); text-decoration: underline; }
 .form-message { color: #2b694d; font-size: .86rem; }
 .form-error { color: #b0392e; font-size: .86rem; }
+.api-error-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px max(20px, calc((100% - 1200px) / 2)); background: #fff0ee; color: #8f241b; border-bottom: 1px solid #efc4bf; }
+.api-error-banner button { flex: 0 0 auto; text-decoration: underline; }
 .demo-disclaimer { margin: 22px 0 0; font-size: .74rem; }
 
 .account-layout { display: grid; grid-template-columns: minmax(270px, .85fr) minmax(0, 1.15fr); gap: 36px; align-items: start; }
