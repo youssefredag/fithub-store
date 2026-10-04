@@ -4,7 +4,18 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FaHeart, FaRegHeart, FaStar } from 'react-icons/fa';
 import { useCart } from '../context/CartContext';
 import { apiRequest, jsonBody } from '../services/api';
-import { formatPrice, loadBrands, loadCategories, loadProduct, loadProducts, slugify } from '../services/catalog';
+import {
+  formatPrice,
+  loadBrandDetails,
+  loadBrands,
+  loadCategories,
+  loadCategoryDetails,
+  loadClothingReviews,
+  loadProduct,
+  loadProducts,
+  loadSubcategoryDetails,
+  slugify,
+} from '../services/catalog';
 
 function useCatalog() {
   const [products, setProducts] = useState([]);
@@ -15,8 +26,12 @@ function useCatalog() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([loadProducts(), loadCategories(), loadBrands()])
-      .then(([nextProducts, nextCategories, nextBrands]) => {
+    loadProducts()
+      .then(async (nextProducts) => {
+        const [nextCategories, nextBrands] = await Promise.all([
+          loadCategories(),
+          loadBrands(nextProducts),
+        ]);
         if (!active) return;
         setProducts(nextProducts);
         setCategories(nextCategories);
@@ -32,6 +47,11 @@ function useCatalog() {
   }, []);
 
   return { products, categories, brands, loading, error };
+}
+
+function hasSubcategory(product, targetSlug) {
+  const subcategories = Array.isArray(product.subcategory) ? product.subcategory : [product.subcategory];
+  return subcategories.some((subcategory) => slugify(subcategory?.name || subcategory || '') === targetSlug);
 }
 
 function ProductTile({ product }) {
@@ -63,23 +83,41 @@ function ProductTile({ product }) {
 
 export function ProductGrid({ products, loading }) {
   if (loading) return <div className="shop-empty">Loading the collection...</div>;
-  if (!products.length) return <div className="shop-empty">No products in this list yet. <Link to="/products">Browse equipment</Link></div>;
+  if (!products.length) return <div className="shop-empty">No products in this list yet. <Link to="/products">Browse clothing</Link></div>;
   return <div className="shop-grid">{products.map((product) => <ProductTile key={product.id} product={product} />)}</div>;
 }
 
 export function CatalogPage({ mode = 'products' }) {
   const { products, categories, brands, loading, error } = useCatalog();
-  const { brand, category } = useParams();
+  const { brand, category, subcategory } = useParams();
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('featured');
-  const title = mode === 'brand-detail' ? 'Brand collection' : mode === 'category-detail' ? 'Category collection' : 'Shop equipment';
-  const detailSlug = brand || category;
+  const [collectionDetails, setCollectionDetails] = useState(null);
+  const [detailsError, setDetailsError] = useState('');
+  const title = mode === 'brand-detail' ? 'Brand collection' : mode === 'category-detail' ? 'Category collection' : 'Shop clothing';
+  const detailSlug = brand || category || subcategory;
+
+  useEffect(() => {
+    if (!detailSlug || !['brand-detail', 'category-detail', 'subcategory-detail'].includes(mode)) return undefined;
+    let active = true;
+    setCollectionDetails(null);
+    setDetailsError('');
+    const request = mode === 'brand-detail'
+      ? loadBrandDetails(detailSlug)
+      : mode === 'category-detail'
+        ? loadCategoryDetails(detailSlug)
+        : loadSubcategoryDetails(detailSlug);
+    request
+      .then((details) => { if (active) setCollectionDetails(details); })
+      .catch((requestError) => { if (active) setDetailsError(requestError.message || 'Could not load this collection.'); });
+    return () => { active = false; };
+  }, [detailSlug, mode]);
 
   if (mode === 'brands' || mode === 'categories') {
     const values = mode === 'brands' ? brands : categories;
     return (
       <section className="shop-page">
-        <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / Explore</p><h1>{mode === 'brands' ? 'Brands' : 'Categories'}</h1><p>{mode === 'brands' ? 'Makers currently stocked in the shop.' : 'Browse the equipment by type.'}</p></div>
+        <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / Explore</p><h1>{mode === 'brands' ? 'Brands' : 'Categories'}</h1><p>{mode === 'brands' ? 'Clothing brands currently stocked in the shop.' : 'Browse clothing by type.'}</p></div>
         <div className="collection-grid">
           {loading && <p className="shop-empty">Loading collections...</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
@@ -98,6 +136,7 @@ export function CatalogPage({ mode = 'products' }) {
   let visible = products;
   if (mode === 'brand-detail') visible = visible.filter((product) => slugify(product.brand) === detailSlug);
   if (mode === 'category-detail') visible = visible.filter((product) => slugify(product.category) === detailSlug);
+  if (mode === 'subcategory-detail') visible = visible.filter((product) => hasSubcategory(product, detailSlug));
   const collectionTitle = decodeURIComponent(detailSlug || '')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -107,8 +146,11 @@ export function CatalogPage({ mode = 'products' }) {
 
   return (
     <section className="shop-page">
-      <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / {mode === 'products' ? 'Catalog' : mode === 'brand-detail' ? 'Brands' : 'Categories'}</p><h1>{mode === 'products' ? title : collectionTitle}</h1><p>{mode === 'products' ? 'Explore products currently available in the Route store.' : mode === 'brand-detail' ? 'Products from this brand.' : 'Products available in this category.'}</p></div>
-      <div className="catalog-toolbar"><label className="catalog-search"><span>Search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search equipment" /></label><label className="catalog-sort"><span>Sort</span><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="featured">Featured</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div>
+      <div className="shop-page-heading"><p className="shop-eyebrow">FitHub / {mode === 'products' ? 'Catalog' : mode === 'brand-detail' ? 'Brands' : 'Categories'}</p><h1>{mode === 'products' ? title : collectionDetails?.name || collectionTitle}</h1><p>{mode === 'products' ? 'Explore clothing products currently available in the Route store.' : mode === 'brand-detail' ? 'Products from this clothing brand.' : mode === 'subcategory-detail' ? 'Products in this clothing subcategory.' : 'Products available in this clothing category.'}</p></div>
+      {detailsError && <p className="form-error" role="alert">{detailsError}</p>}
+      {mode === 'category-detail' && collectionDetails?.subcategories?.length > 0 && <nav className="subcategory-list" aria-label="Subcategories">{collectionDetails.subcategories.map((item) => <Link className="subcategory-chip" key={item.id} to={`/subcategories/${slugify(item.name)}`}>{item.name}</Link>)}</nav>}
+      {mode === 'subcategory-detail' && collectionDetails?.name && <p className="account-note">Category: <Link to={`/categories/${slugify(collectionDetails.categoryName)}`}>{collectionDetails.categoryName}</Link></p>}
+      <div className="catalog-toolbar"><label className="catalog-search"><span>Search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search clothing" /></label><label className="catalog-sort"><span>Sort</span><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="featured">Featured</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div>
       {error && <p className="form-error" role="alert">{error}</p>}
       <ProductGrid products={visible} loading={loading} />
     </section>
@@ -118,6 +160,79 @@ export function CatalogPage({ mode = 'products' }) {
 export function WishlistPage() {
   const { wishlist, user, authReady } = useCart();
   return <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Saved</p><h1>Wishlist</h1><p>{wishlist.length} saved {wishlist.length === 1 ? 'item' : 'items'}.</p></div>{!user ? <div className="shop-empty">Sign in to view your saved products. <Link to="/login">Sign in</Link></div> : !authReady ? <div className="shop-empty">Loading your wishlist...</div> : <ProductGrid products={wishlist} />}</section>;
+}
+
+export function ProfilePage() {
+  const { user, updateProfile, authReady } = useCart();
+  const [notice, setNotice] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  if (!user) return <section className="shop-page shop-empty-page"><h1>Sign in to manage your profile</h1><Link className="button" to="/login">Sign in</Link></section>;
+  if (!authReady) return <section className="shop-page"><p role="status">Loading your account...</p></section>;
+
+  async function submit(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice('');
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await updateProfile({
+        name: String(data.get('name') || '').trim(),
+        email: String(data.get('email') || '').trim(),
+        phone: String(data.get('phone') || '').trim(),
+      });
+      if (updated) setNotice('Your profile was updated.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="shop-page">
+      <div className="shop-page-heading"><p className="shop-eyebrow">Your account</p><h1>Profile</h1><p>Update the contact information saved to your Route account.</p></div>
+      <form className="shop-form address-form profile-form" onSubmit={submit}>
+        <label>Name<input name="name" defaultValue={user.name || ''} autoComplete="name" required /></label>
+        <label>Email<input name="email" type="email" defaultValue={user.email || ''} autoComplete="email" required /></label>
+        <label>Phone<input name="phone" type="tel" defaultValue={user.phone || ''} autoComplete="tel" required /></label>
+        <button className="button" type="submit" disabled={submitting}>{submitting ? 'Saving...' : 'Save profile'}</button>
+        {notice && <p className="form-message" role="status">{notice}</p>}
+      </form>
+    </section>
+  );
+}
+
+export function ReviewsPage() {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    loadClothingReviews()
+      .then((result) => { if (active) setReviews(result); })
+      .catch((requestError) => { if (active) setError(requestError.message || 'Could not load reviews.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  return (
+    <section className="shop-page">
+      <div className="shop-page-heading"><p className="shop-eyebrow">Clothing / Customer feedback</p><h1>Reviews</h1><p>Reviews for products currently listed in the clothing store.</p></div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading ? <p className="shop-empty">Loading reviews...</p> : reviews.length ? <div className="review-list">
+        {reviews.map((review) => {
+          const product = review.product || {};
+          const productId = String(product._id || product.id || '');
+          return <article className="review-entry" key={review._id || review.id}>
+            <p className="shop-rating"><FaStar /> {review.rating} / 5</p>
+            <p>{review.review}</p>
+            <small>{review.user?.name || 'Customer'}</small>
+            {productId && <p><Link to={`/products/${productId}`}>{product.title || product.name || 'View product'}</Link></p>}
+          </article>;
+        })}
+      </div> : !error && <p className="shop-empty">No clothing reviews yet.</p>}
+    </section>
+  );
 }
 
 export function AccountPage({ mode }) {
@@ -256,33 +371,59 @@ export function AccountPage({ mode }) {
 }
 
 export function AddressesPage() {
-  const { addresses, saveAddress, removeAddress, user } = useCart();
+  const { addresses, saveAddress, updateAddress, getAddress, removeAddress, user } = useCart();
   const [notice, setNotice] = useState('');
+  const [editingAddress, setEditingAddress] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
   async function submit(event) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const formData = new FormData(formElement);
-    const saved = await saveAddress(Object.fromEntries(formData.entries()));
-    if (!saved) return;
-    formElement.reset();
-    setNotice(user?.token ? 'Address saved to your account.' : 'Address saved on this device.');
+    setSubmitting(true);
+    try {
+      const address = Object.fromEntries(formData.entries());
+      const saved = editingAddress
+        ? await updateAddress(editingAddress.id, address)
+        : await saveAddress(address);
+      if (!saved) return;
+      formElement.reset();
+      setEditingAddress(null);
+      setNotice(editingAddress ? 'Address updated.' : 'Address saved to your account.');
+    } finally {
+      setSubmitting(false);
+    }
   }
+
+  async function editAddress(id) {
+    const address = await getAddress(id);
+    if (address) {
+      setEditingAddress(address);
+      setNotice('');
+    }
+  }
+
   return (
     <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Delivery</p><h1>Addresses</h1><p>Manage the places where your orders can be delivered.</p><nav className="account-links"><Link to="/orders">View orders</Link><Link to="/change-password">Change password</Link></nav></div>
-      {!user ? <div className="shop-empty">Sign in to manage your delivery addresses. <Link to="/login">Sign in</Link></div> : <div className="account-layout"><form className="shop-form address-form" onSubmit={submit}><h2>Add a delivery address</h2>{['Full name', 'Phone', 'Street address', 'City', 'Postal code'].map((label) => <label key={label}>{label}<input name={label.toLowerCase().replaceAll(' ', '-')} required /></label>)}<button className="button" type="submit">Save address</button>{notice && <p className="form-message" role="status">{notice}</p>}</form>
-        <div className="address-list">{addresses.map((address) => <article className="address-entry" key={address.id}><h2>{address['full-name']}</h2><p>{address['street-address']}</p><p>{address.city}, {address['postal-code']}</p><p>{address.phone}</p><button className="text-button" type="button" onClick={() => removeAddress(address.id)}>Remove address</button></article>)}{!addresses.length && <p className="shop-empty">No saved addresses yet.</p>}</div>
+      {!user ? <div className="shop-empty">Sign in to manage your delivery addresses. <Link to="/login">Sign in</Link></div> : <div className="account-layout"><form className="shop-form address-form" key={editingAddress?.id || 'new-address'} onSubmit={submit}><h2>{editingAddress ? 'Edit delivery address' : 'Add a delivery address'}</h2>{[['full-name', 'Name'], ['phone', 'Phone'], ['street-address', 'Street address'], ['city', 'City'], ['postal-code', 'Postal code']].map(([name, label]) => <label key={name}>{label}<input name={name} defaultValue={editingAddress?.[name] || ''} required /></label>)}<button className="button" type="submit" disabled={submitting}>{submitting ? 'Saving...' : editingAddress ? 'Update address' : 'Save address'}</button>{editingAddress && <button className="text-button" type="button" onClick={() => setEditingAddress(null)}>Cancel</button>}{notice && <p className="form-message" role="status">{notice}</p>}</form>
+        <div className="address-list">{addresses.map((address) => <article className="address-entry" key={address.id}><h2>{address['full-name']}</h2><p>{address['street-address']}</p><p>{address.city}, {address['postal-code']}</p><p>{address.phone}</p><div className="account-links"><button className="text-button" type="button" onClick={() => editAddress(address.id)}>Edit address</button><button className="text-button" type="button" onClick={() => removeAddress(address.id)}>Remove address</button></div></article>)}{!addresses.length && <p className="shop-empty">No saved addresses yet.</p>}</div>
       </div>}
     </section>
   );
 }
 
 export function CheckoutPage() {
-  const { items, addresses, saveAddress, placeOrder, user } = useCart();
+  const {
+    items, addresses, saveAddress, placeOrder, user,
+    cartTotal, cartTotalAfterDiscount, appliedCoupon,
+  } = useCart();
   const navigate = useNavigate();
   const [payment, setPayment] = useState('cash');
   const [selectedAddressId, setSelectedAddressId] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const subtotal = cartTotal || calculatedTotal;
+  const total = cartTotalAfterDiscount < subtotal ? cartTotalAfterDiscount : subtotal;
   if (!user) return <section className="shop-page shop-empty-page"><h1>Sign in to check out</h1><p>Your cart and orders are managed by your Route account.</p><Link className="button" to="/login">Sign in</Link></section>;
   if (!items.length) return <section className="shop-page shop-empty-page"><h1>Your cart is empty</h1><Link className="button" to="/products">Browse equipment</Link></section>;
 
@@ -310,7 +451,7 @@ export function CheckoutPage() {
         <div className="checkout-fields"><fieldset className="checkout-fieldset"><legend>Delivery address</legend>{addresses.length > 0 && <label className="saved-address-select">Saved address<select name="saved-address" value={selectedAddressId} onChange={(event) => setSelectedAddressId(event.target.value)}><option value="">Enter a new address</option>{addresses.map((address) => <option key={address.id} value={address.id}>{address['full-name']} — {address.city}</option>)}</select></label>}<div className="checkout-address-grid">{[['full-name', 'Full name'], ['phone', 'Phone'], ['street-address', 'Street address'], ['city', 'City'], ['postal-code', 'Postal code']].map(([name, label]) => <label key={name}>{label}<input name={name} required={!selectedAddressId} disabled={Boolean(selectedAddressId)} /></label>)}</div></fieldset>
           <fieldset className="checkout-fieldset"><legend>Payment method</legend><label className="payment-choice"><input type="radio" name="payment" checked={payment === 'cash'} onChange={() => setPayment('cash')} /><span><strong>Cash on delivery</strong><small>Pay when your order arrives</small></span></label><label className="payment-choice"><input type="radio" name="payment" checked={payment === 'online'} onChange={() => setPayment('online')} /><span><strong>Online payment</strong><small>Pay securely through the Route checkout</small></span></label></fieldset>
         </div>
-        <aside className="checkout-summary"><h2>Order summary</h2>{items.map((item) => <p className="summary-row" key={item.id}><span>{item.title} × {item.qty}</span><strong>{formatPrice(item.price * item.qty)}</strong></p>)}<p className="summary-total"><span>Total</span><strong>{formatPrice(total)}</strong></p><button className="button" type="submit" disabled={submitting}>{submitting ? 'Processing...' : payment === 'online' ? 'Continue to payment' : 'Place order'}</button></aside>
+        <aside className="checkout-summary"><h2>Order summary</h2>{items.map((item) => <p className="summary-row" key={item.id}><span>{item.title} × {item.qty}</span><strong>{formatPrice(item.price * item.qty)}</strong></p>)}{appliedCoupon && <p className="form-message">Coupon applied: {appliedCoupon}</p>}{total < subtotal && <p className="summary-row"><span>Discount</span><strong>−{formatPrice(subtotal - total)}</strong></p>}<p className="summary-total"><span>Total</span><strong>{formatPrice(total)}</strong></p><button className="button" type="submit" disabled={submitting}>{submitting ? 'Processing...' : payment === 'online' ? 'Continue to payment' : 'Place order'}</button></aside>
       </form>
     </section>
   );
@@ -434,7 +575,7 @@ export function ProductDetailsPage() {
         </div>
       </div>
       <section className="reviews-section">
-        <div className="shop-page-heading"><p className="shop-eyebrow">Customer feedback</p><h2>Reviews</h2></div>
+        <div className="shop-page-heading"><p className="shop-eyebrow">Customer feedback</p><h2>Reviews</h2><Link to="/reviews">See all clothing reviews</Link></div>
         {reviewsError && <p className="form-error" role="alert">{reviewsError}</p>}
         {user?.token ? (
           <form className="shop-form review-form" onSubmit={submitReview}>
@@ -456,9 +597,20 @@ export function ProductDetailsPage() {
                 <p>{review.review || review.comment}</p>
                 <small>{review.user?.name || 'Customer'}</small>
                 {isOwner && <div className="account-links">
-                  <button className="text-button" type="button" onClick={() => { setEditingReview({ ...review, id: reviewId }); setReviewText(review.review || review.comment || ''); setReviewRating(String(review.rating || 5)); }}>Edit</button>
-                  <button className="text-button" type="button" onClick={() => deleteReview(reviewId)}>Delete</button>
-                </div>}
+                      <button className="text-button" type="button" onClick={async () => {
+                        try {
+                          const result = await apiRequest(`/reviews/${encodeURIComponent(reviewId)}`, { token: user.token });
+                          const fullReview = result?.data?.review || result?.data || review;
+                          setEditingReview({ ...fullReview, id: reviewId });
+                          setReviewText(fullReview.review || fullReview.comment || '');
+                          setReviewRating(String(fullReview.rating || 5));
+                          setReviewsError('');
+                        } catch (requestError) {
+                          setReviewsError(requestError.message || 'Could not load this review.');
+                        }
+                      }}>Edit</button>
+                      <button className="text-button" type="button" onClick={() => deleteReview(reviewId)}>Delete</button>
+                    </div>}
               </article>
             );
           })}

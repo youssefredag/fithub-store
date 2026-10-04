@@ -40,6 +40,7 @@ export default function Header() {
 
                         <li><NavLink className="hover:text-blue-600" to="/categories">Categories</NavLink></li>
                         <li><NavLink className="hover:text-blue-600" to="/brands">Brands</NavLink></li>
+                        <li><NavLink className="hover:text-blue-600" to="/reviews">Reviews</NavLink></li>
 
                         <li>
                             <NavLink className="hover:text-blue-600" end to="/about">
@@ -51,6 +52,7 @@ export default function Header() {
                     <div className="header-actions">
                         <Link to="/wishlist" className="header-icon" aria-label={`Wishlist, ${wishlist.length} items`}><FaRegHeart /><span>{wishlist.length}</span></Link>
                         <Link to={user ? '/orders' : '/login'} className="header-icon" aria-label={user ? 'Your orders' : 'Sign in'}><FaRegUser /><span>{user ? user.name.split(' ')[0] : 'Account'}</span></Link>
+                        {user && <Link to="/profile" className="header-icon" aria-label="Edit profile"><span>Profile</span></Link>}
                         {user && <button className="header-signout" type="button" onClick={signOut}>Sign out</button>}
                         <Link to="/cart" className="btn btn-primary">Cart <span>{cartCount}</span></Link>
                     </div>
@@ -74,10 +76,12 @@ export default function Header() {
                             <li><NavLink to="/products" onClick={toggleMenu}>Products</NavLink></li>
                             <li><NavLink to="/categories" onClick={toggleMenu}>Categories</NavLink></li>
                             <li><NavLink to="/brands" onClick={toggleMenu}>Brands</NavLink></li>
+                            <li><NavLink to="/reviews" onClick={toggleMenu}>Reviews</NavLink></li>
                             <li><NavLink to="/about" onClick={toggleMenu}>About</NavLink></li>
                             <li><Link to="/wishlist" onClick={toggleMenu}>Wishlist ({wishlist.length})</Link></li>
                             <li><Link to="/orders" onClick={toggleMenu}>Orders</Link></li>
                             <li><Link to="/addresses" onClick={toggleMenu}>Addresses</Link></li>
+                            {user && <li><Link to="/profile" onClick={toggleMenu}>Profile</Link></li>}
                             <li><Link to="/cart" onClick={toggleMenu}>Cart ({cartCount})</Link></li>
                             <li><Link to={user ? '/orders' : '/login'} onClick={toggleMenu}>{user ? user.name : 'Account'}</Link></li>
                         </ul>

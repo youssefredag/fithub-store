@@ -140,6 +140,9 @@ main.pt-20 { padding-top: 76px; }
 .collection-tile small { display: flex; justify-content: space-between; color: var(--shop-muted); }
 .collection-tile img { align-self: center; width: 76px; height: 76px; object-fit: contain; }
 .collection-tile:hover { border-color: var(--shop-green); }
+.subcategory-list { display: flex; flex-wrap: wrap; gap: 10px; margin: -10px 0 26px; }
+.subcategory-chip { padding: 8px 13px; border: 1px solid var(--shop-line); border-radius: 999px; background: #fff; color: var(--shop-deep-green); font-size: .82rem; }
+.subcategory-chip:hover { border-color: var(--shop-green); }
 
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: clamp(36px, 7vw, 96px); align-items: center; }
 .detail-image { min-height: 450px; display: grid; place-items: center; background: #e9eee8; }
@@ -180,6 +183,11 @@ main.pt-20 { padding-top: 76px; }
 .demo-disclaimer { margin: 22px 0 0; font-size: .74rem; }
 
 .account-layout { display: grid; grid-template-columns: minmax(270px, .85fr) minmax(0, 1.15fr); gap: 36px; align-items: start; }
+.profile-form { max-width: 560px; padding: 24px; border: 1px solid var(--shop-line); background: #fff; }
+.cart-coupon { display: grid; gap: 8px; margin: 22px 0; padding: 18px; border: 1px solid var(--shop-line); background: #fff; }
+.cart-coupon > div { display: flex; gap: 8px; }
+.cart-coupon input { min-height: 40px; flex: 1; padding: 0 10px; border: 1px solid var(--shop-line); font: inherit; }
+.cart-coupon label { font-size: .85rem; font-weight: 600; }
 .address-form, .checkout-summary { padding: 24px; border: 1px solid var(--shop-line); background: white; }
 .address-form h2, .checkout-summary h2 { margin: 0; font-size: 1.25rem; }
 .address-entry, .order-entry { padding: 22px; border: 1px solid var(--shop-line); background: white; }

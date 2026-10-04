@@ -1,15 +1,32 @@
 import { OrderSummary } from "../components/OrderSummary";
 import { useCart } from "../context/CartContext";
 import { Link } from "react-router-dom";
+import { useState } from "react";
 
 export default function CartPage() {
-  const { items, removeFromCart, addToCart, decreaseQtyFromCart, user, authReady } = useCart();
+  const {
+    items, removeFromCart, addToCart, decreaseQtyFromCart, clearCart,
+    cartTotal, cartTotalAfterDiscount, appliedCoupon, applyCoupon, user, authReady,
+  } = useCart();
+  const [coupon, setCoupon] = useState('');
+  const [notice, setNotice] = useState('');
+  const [couponBusy, setCouponBusy] = useState(false);
 
 
-  let total = 0;
-  for (let i = 0; i < items.length; i++) {
-    const element = items[i];
-    total = total + (element.price * element.qty )
+  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const subtotal = cartTotal || calculatedTotal;
+  const total = cartTotalAfterDiscount < subtotal ? cartTotalAfterDiscount : subtotal;
+
+  async function submitCoupon(event) {
+    event.preventDefault();
+    setCouponBusy(true);
+    setNotice('');
+    try {
+      const applied = await applyCoupon(coupon);
+      if (applied) setNotice(`Coupon ${coupon.trim()} applied.`);
+    } finally {
+      setCouponBusy(false);
+    }
   }
 
 
@@ -53,7 +70,7 @@ export default function CartPage() {
 
             <div className="flex flex-col gap-2">
               <div className="flex justify-center items-center gap-2">
-                <button className="bg-[var(--brandColor)] border-[var(--brandColor)] text-white hover:bg-blue-800 hover:cursor-pointer border-2 rounded-full justify-center flex text-center items-center w-8 h-8" onClick={()=> addToCart(i) }>+</button>
+                <button className="bg-[var(--brandColor)] border-[var(--brandColor)] text-white hover:bg-blue-800 hover:cursor-pointer border-2 rounded-full justify-center flex text-center items-center w-8 h-8" onClick={()=> addToCart({ ...i, qty: 1 }) }>+</button>
                 <span>{i.qty}</span>
                 <button className="bg-[var(--brandColor)] border-[var(--brandColor)] text-white hover:bg-blue-800 hover:cursor-pointer border-2 rounded-full justify-center flex text-center items-center w-8 h-8" onClick={()=> decreaseQtyFromCart(i.id) }>-</button>
               </div>
@@ -62,6 +79,14 @@ export default function CartPage() {
           </div>
         ))}
       </div>
+
+      <form className="cart-coupon" onSubmit={submitCoupon}>
+        <label htmlFor="cart-coupon">Coupon code</label>
+        <div><input id="cart-coupon" value={coupon} onChange={(event) => setCoupon(event.target.value)} placeholder="Enter coupon code" /><button className="button button-small" type="submit" disabled={couponBusy}>{couponBusy ? 'Applying...' : 'Apply'}</button></div>
+        {appliedCoupon && <p className="form-message">Applied: {appliedCoupon}</p>}
+        {notice && <p className="form-message" role="status">{notice}</p>}
+        <button className="text-button" type="button" onClick={() => clearCart()}>Clear cart</button>
+      </form>
 
       <OrderSummary total={total} />
     </div>

@@ -38,6 +38,9 @@ function unwrapCart(result) {
   const entries = cart?.products || cart?.items || [];
   return {
     id: cart?._id || cart?.id || '',
+    total: Number(cart?.totalCartPrice ?? cart?.total ?? 0),
+    totalAfterDiscount: Number(cart?.totalCartPriceAfterDiscount ?? cart?.totalAfterDiscount ?? cart?.totalCartPrice ?? cart?.total ?? 0),
+    coupon: cart?.appliedCoupon?.name || cart?.coupon?.name || '',
     items: entries.map((entry) => {
       const product = normalizeProduct(entry.product || entry);
       return { ...product, qty: Number(entry.count || entry.qty || 1) };
@@ -76,6 +79,9 @@ export function CartProvider({ children }) {
   const [items, setItems] = useState([]);
   const [wishlist, setWishlist] = useState([]);
   const [cartId, setCartId] = useState('');
+  const [cartTotal, setCartTotal] = useState(0);
+  const [cartTotalAfterDiscount, setCartTotalAfterDiscount] = useState(0);
+  const [appliedCoupon, setAppliedCoupon] = useState('');
   const [user, setUser] = useState(() => {
     const savedUser = readStorage('fithub-user', null);
     return savedUser?.token ? savedUser : null;
@@ -101,6 +107,9 @@ export function CartProvider({ children }) {
       setItems([]);
       setWishlist([]);
       setCartId('');
+      setCartTotal(0);
+      setCartTotalAfterDiscount(0);
+      setAppliedCoupon('');
       setAddresses([]);
       setOrders([]);
       return undefined;
@@ -112,7 +121,7 @@ export function CartProvider({ children }) {
       try {
         await apiRequest('/auth/verifyToken', { token: user.token });
         const requests = [
-          apiRequest('/cart', { token: user.token }),
+          apiRequest('/cart', { token: user.token, version: 2 }),
           apiRequest('/wishlist', { token: user.token }),
           apiRequest('/addresses', { token: user.token }),
           user._id ? apiRequest(`/orders/user/${encodeURIComponent(user._id)}`, { token: user.token }) : Promise.resolve(null),
@@ -124,6 +133,9 @@ export function CartProvider({ children }) {
           const cart = unwrapCart(cartResult.value);
           setItems(cart.items);
           setCartId(cart.id);
+          setCartTotal(cart.total);
+          setCartTotalAfterDiscount(cart.totalAfterDiscount);
+          setAppliedCoupon(cart.coupon);
         } else setApiError(cartResult.reason.message || 'Could not load your cart.');
 
         if (wishlistResult.status === 'fulfilled') setWishlist(unwrapWishlist(wishlistResult.value));
@@ -151,10 +163,13 @@ export function CartProvider({ children }) {
 
   async function refreshCart() {
     if (!user?.token) return false;
-    const result = await apiRequest('/cart', { token: user.token });
+    const result = await apiRequest('/cart', { token: user.token, version: 2 });
     const cart = unwrapCart(result);
     setItems(cart.items);
     setCartId(cart.id);
+    setCartTotal(cart.total);
+    setCartTotalAfterDiscount(cart.totalAfterDiscount);
+    setAppliedCoupon(cart.coupon);
     return true;
   }
 
@@ -172,12 +187,14 @@ export function CartProvider({ children }) {
       await apiRequest('/cart', {
         method: 'POST',
         token: user.token,
+        version: 2,
         body: jsonBody({ productId: product.id }),
       });
       if (nextQuantity > 1) {
         await apiRequest(`/cart/${encodeURIComponent(product.id)}`, {
           method: 'PUT',
           token: user.token,
+          version: 2,
           body: jsonBody({ count: nextQuantity }),
         });
       }
@@ -189,7 +206,7 @@ export function CartProvider({ children }) {
   async function removeFromCart(id) {
     if (!requireAccount()) return null;
     return reportRequest(async () => {
-      await apiRequest(`/cart/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token });
+      await apiRequest(`/cart/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token, version: 2 });
       await refreshCart();
       return true;
     });
@@ -203,6 +220,7 @@ export function CartProvider({ children }) {
       await apiRequest(`/cart/${encodeURIComponent(id)}`, {
         method: 'PUT',
         token: user.token,
+        version: 2,
         body: jsonBody({ count: safeQuantity }),
       });
       await refreshCart();
@@ -214,6 +232,45 @@ export function CartProvider({ children }) {
     const found = items.find((item) => item.id === String(id));
     if (found) return updateCartQuantity(id, found.qty - 1);
     return null;
+  }
+
+  async function clearCart() {
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      await apiRequest('/cart', { method: 'DELETE', token: user.token, version: 2 });
+      setItems([]);
+      setCartId('');
+      setCartTotal(0);
+      setCartTotalAfterDiscount(0);
+      setAppliedCoupon('');
+      return true;
+    });
+  }
+
+  async function applyCoupon(couponName) {
+    if (!requireAccount()) return null;
+    const safeCouponName = String(couponName || '').trim();
+    if (!safeCouponName) {
+      setApiError('Enter a coupon code first.');
+      return null;
+    }
+    return reportRequest(async () => {
+      const result = await apiRequest('/cart/applyCoupon', {
+        method: 'PUT',
+        token: user.token,
+        version: 2,
+        body: jsonBody({ couponName: safeCouponName }),
+      });
+      const cart = unwrapCart(result);
+      if (cart.items.length) {
+        setItems(cart.items);
+        setCartId(cart.id || cartId);
+      } else await refreshCart();
+      setCartTotal(cart.total);
+      setCartTotalAfterDiscount(cart.totalAfterDiscount);
+      setAppliedCoupon(safeCouponName);
+      return true;
+    });
   }
 
   async function toggleWishlist(product) {
@@ -257,6 +314,44 @@ export function CartProvider({ children }) {
     });
   }
 
+  async function updateAddress(id, address) {
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      const existingResult = await apiRequest(`/addresses/${encodeURIComponent(id)}`, { token: user.token });
+      const existing = existingResult?.data?.address || existingResult?.data;
+      if (!existing || String(existing._id || existing.id) !== String(id)) {
+        throw new Error('Could not confirm the address to update.');
+      }
+      const result = await apiRequest('/addresses', {
+        method: 'POST',
+        token: user.token,
+        body: jsonBody({
+          name: address.name || address['full-name'] || existing.name,
+          details: address.details || address['street-address'],
+          phone: address.phone,
+          city: address.city,
+          ...(address.postalCode || address['postal-code'] ? { postalCode: address.postalCode || address['postal-code'] } : {}),
+        }),
+      });
+      const replacement = unwrapAddresses(result)[0];
+      if (!replacement) throw new Error('The replacement address was not returned by the server.');
+      const normalized = normalizeAddress(replacement);
+      await apiRequest(`/addresses/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token });
+      setAddresses((previous) => previous.map((saved) => saved.id === String(id) ? normalized : saved));
+      return normalized;
+    });
+  }
+
+  async function getAddress(id) {
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      const result = await apiRequest(`/addresses/${encodeURIComponent(id)}`, { token: user.token });
+      const address = result?.data?.address || result?.data;
+      if (!address) throw new Error('The requested address was not found.');
+      return normalizeAddress(address);
+    });
+  }
+
   function removeAddress(id) {
     if (!requireAccount()) return;
     void reportRequest(async () => {
@@ -271,11 +366,14 @@ export function CartProvider({ children }) {
     return reportRequest(async () => {
       let currentCartId = cartId;
       if (!currentCartId) {
-        const cartResult = await apiRequest('/cart', { token: user.token });
+        const cartResult = await apiRequest('/cart', { token: user.token, version: 2 });
         const cart = unwrapCart(cartResult);
         currentCartId = cart.id;
         setItems(cart.items);
         setCartId(cart.id);
+        setCartTotal(cart.total);
+        setCartTotalAfterDiscount(cart.totalAfterDiscount);
+        setAppliedCoupon(cart.coupon);
       }
       if (!currentCartId) throw new Error('Your server cart is empty. Refresh the page and try again.');
 
@@ -302,6 +400,7 @@ export function CartProvider({ children }) {
       const result = await apiRequest(`/orders/${encodeURIComponent(currentCartId)}`, {
         method: 'POST',
         token: user.token,
+        version: 2,
         body: jsonBody({ shippingAddress }),
       });
       const order = result?.data?.order || result?.data;
@@ -333,6 +432,27 @@ export function CartProvider({ children }) {
     setAuthReady(true);
   }
 
+  async function updateProfile(profile) {
+    if (!user?.token) return null;
+    return reportRequest(async () => {
+      const result = await apiRequest('/users/updateMe/', {
+        method: 'PUT',
+        token: user.token,
+        body: jsonBody(profile),
+      });
+      const updatedUser = result?.data?.user || result?.data || {};
+      const nextUser = {
+        ...user,
+        ...updatedUser,
+        _id: updatedUser._id || user._id,
+        token: user.token,
+      };
+      setUser(nextUser);
+      return nextUser;
+    });
+  }
+
+
   useEffect(() => {
     if (user) localStorage.setItem('fithub-user', JSON.stringify(user));
     else localStorage.removeItem('fithub-user');
@@ -340,9 +460,10 @@ export function CartProvider({ children }) {
 
   return (
     <CartContext.Provider value={{
-      items, addToCart, removeFromCart, decreaseQtyFromCart, updateCartQuantity,
+      items, addToCart, removeFromCart, decreaseQtyFromCart, updateCartQuantity, clearCart,
+      cartTotal, cartTotalAfterDiscount, appliedCoupon, applyCoupon,
       wishlist, toggleWishlist, user, signIn, signOut,
-      addresses, saveAddress, removeAddress, orders, placeOrder,
+      addresses, saveAddress, updateAddress, getAddress, removeAddress, orders, placeOrder, updateProfile,
       authReady,
       apiError, dismissApiError: () => setApiError(''),
     }}>

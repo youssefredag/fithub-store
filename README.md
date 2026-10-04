@@ -7,15 +7,16 @@ A React storefront integrated with the Route E-commerce API.
 
 ## Store Features
 - Products, brands, and categories loaded from Route, with search, sorting, and detail pages
-- Route-backed cart, wishlist, product reviews, addresses, and order history
+- Route-backed cart (including coupon/clear), wishlist, product reviews, addresses, and order history
 - Route account registration, sign-in, password reset, and password change
+- Profile editing, clothing subcategories, and cash/online checkout through Route
 - Cash-on-delivery and online checkout through Route
 
 ## Tech Stack
 React · React Router · Vite · Context API
 
 ## Backend Configuration
-The app uses the Route E-commerce API at `https://ecommerce.routemisr.com/api/v1` for its catalog and shopping operations. Products, images, categories, and brands come from Route; adding products to the cart or wishlist requires signing in so those changes can be saved to the account. Online payment uses the checkout session returned by Route. To use a different API root, set `VITE_API_BASE_URL` in a local `.env` file, for example:
+The app uses the Route E-commerce API at `https://ecommerce.routemisr.com/api/v1` for its catalog and account operations, and Cart/Orders v2 endpoints for cart changes and cash orders. Products are filtered to the men's and women's fashion categories. Cart, wishlist, reviews, addresses, profile details, and orders require a signed-in account. Online payment uses a checkout session returned by Route. Address editing replaces the saved address because the documented address API provides create/read/delete operations but no update endpoint. Administrative `GET /users` and `GET /orders/` endpoints are intentionally not exposed in the customer-facing app. To use a different API root, set `VITE_API_BASE_URL` in a local `.env` file, for example:
 
 ```env
 VITE_API_BASE_URL=https://ecommerce.routemisr.com/api/v1

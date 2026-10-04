@@ -14,7 +14,9 @@ import {
   CatalogPage,
   CheckoutPage,
   OrdersPage,
+  ProfilePage,
   ProductDetailsPage,
+  ReviewsPage,
   WishlistPage,
 } from './pages/CommercePages'
 
@@ -27,6 +29,8 @@ function App() {
         <Route path='/' element={<Home />}   />
         <Route path='/products' element={<CatalogPage />} />
         <Route path='/products/:id' element={<ProductDetailsPage />} />
+        <Route path='/reviews' element={<ReviewsPage />} />
+        <Route path='/subcategories/:subcategory' element={<CatalogPage mode='subcategory-detail' />} />
         <Route path='/brands' element={<CatalogPage mode='brands' />} />
         <Route path='/brands/:brand' element={<CatalogPage mode='brand-detail' />} />
         <Route path='/categories' element={<CatalogPage mode='categories' />} />
@@ -41,6 +45,7 @@ function App() {
         <Route path='/checkout' element={<CheckoutPage />} />
         <Route path='/orders' element={<OrdersPage />} />
         <Route path='/addresses' element={<AddressesPage />} />
+        <Route path='/profile' element={<ProfilePage />} />
         <Route path='/about' element={<About />} />
         <Route path='/titleupdate' element={<TitleUpdater />} />
 

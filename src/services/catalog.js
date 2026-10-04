@@ -5,6 +5,7 @@ function records(result) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.products)) return data.products;
   if (Array.isArray(data?.categories)) return data.categories;
+  if (Array.isArray(data?.subcategories)) return data.subcategories;
   if (Array.isArray(data?.brands)) return data.brands;
   return [];
 }
@@ -42,28 +43,125 @@ function normalizeCollectionItem(item) {
   return { ...item, id: String(item._id || item.id) };
 }
 
+function isClothingCategory(name) {
+  return ['men\'s fashion', 'women\'s fashion'].includes(String(name || '').trim().toLowerCase());
+}
+
+function getNameSlug(item) {
+  return slugify(item.name || item.title || '');
+}
+
+function productSubcategories(product) {
+  const values = Array.isArray(product.subcategory) ? product.subcategory : [product.subcategory];
+  return values.filter((subcategory) => subcategory && typeof subcategory === 'object');
+}
+
 export async function loadProducts() {
-  return (await loadCollection('/products')).map(normalizeProduct);
+  return (await loadCollection('/products'))
+    .map(normalizeProduct)
+    .filter((product) => isClothingCategory(product.category));
 }
 
 export async function loadFeaturedProduct() {
-  const result = await apiRequest('/products?page=1&limit=1');
-  const product = records(result)[0];
-  return product ? normalizeProduct(product) : null;
+  return (await loadProducts())[0] || null;
 }
 
 export async function loadProduct(id) {
   const result = await apiRequest(`/products/${encodeURIComponent(id)}`);
   const product = result?.data?.product || result?.data;
-  return product ? normalizeProduct(product) : null;
+  const normalized = product ? normalizeProduct(product) : null;
+  return normalized && isClothingCategory(normalized.category) ? normalized : null;
 }
 
 export async function loadCategories() {
-  return (await loadCollection('/categories')).map(normalizeCollectionItem);
+  return (await loadCollection('/categories'))
+    .filter((category) => isClothingCategory(category.name))
+    .map(normalizeCollectionItem);
 }
 
-export async function loadBrands() {
-  return (await loadCollection('/brands')).map(normalizeCollectionItem);
+export async function loadCategoryDetails(categorySlug) {
+  const categories = await loadCategories();
+  const category = categories.find((item) => getNameSlug(item) === categorySlug);
+  if (!category) return null;
+  const [categoryResult, subcategoryResult, products] = await Promise.all([
+    apiRequest(`/categories/${encodeURIComponent(category.id)}`),
+    apiRequest(`/categories/${encodeURIComponent(category.id)}/subcategories`),
+    loadProducts(),
+  ]);
+  const categoryDetails = categoryResult?.data?.category || categoryResult?.data || category;
+  const clothingSubcategories = products
+    .filter((product) => product.categoryId === category.id)
+    .flatMap(productSubcategories)
+    .map(normalizeCollectionItem);
+  const relevantIds = new Set(clothingSubcategories.map((subcategory) => subcategory.id));
+  const listedSubcategories = records(subcategoryResult)
+    .map(normalizeCollectionItem)
+    .filter((subcategory) => relevantIds.has(subcategory.id));
+  const subcategoriesById = new Map(clothingSubcategories.map((subcategory) => [subcategory.id, subcategory]));
+  listedSubcategories.forEach((subcategory) => subcategoriesById.set(subcategory.id, subcategory));
+  const subcategories = [...subcategoriesById.values()];
+  return { category: normalizeCollectionItem(categoryDetails), subcategories };
+}
+
+export async function loadSubcategoryDetails(subcategorySlug) {
+  const categories = await loadCategories();
+  const [subcategoryLists, products] = await Promise.all([Promise.all(categories.map(async (category) => {
+    const result = await apiRequest(`/categories/${encodeURIComponent(category.id)}/subcategories`);
+    return records(result).map((subcategory) => ({ ...normalizeCollectionItem(subcategory), categoryName: category.name }));
+  })), loadProducts()]);
+  const productSubcategoryDetails = products.flatMap((product) =>
+    productSubcategories(product).map((subcategory) => ({
+      ...normalizeCollectionItem(subcategory),
+      categoryName: product.category,
+    })),
+  );
+  const knownSubcategories = new Map(
+    [...subcategoryLists.flat(), ...productSubcategoryDetails].map((item) => [item.id, item]),
+  );
+  const subcategory = [...knownSubcategories.values()].find((item) => getNameSlug(item) === subcategorySlug);
+  if (!subcategory) return null;
+  const result = await apiRequest(`/subcategories/${encodeURIComponent(subcategory.id)}`);
+  const details = result?.data?.subcategory || result?.data || subcategory;
+  return { ...normalizeCollectionItem(details), categoryName: subcategory.categoryName };
+}
+
+export async function loadBrands(products) {
+  const clothingProducts = products || await loadProducts();
+  const clothingBrandIds = new Set(clothingProducts.map((product) => product.brandId).filter(Boolean));
+  return (await loadCollection('/brands'))
+    .filter((brand) => clothingBrandIds.has(String(brand._id || brand.id)))
+    .map(normalizeCollectionItem);
+}
+
+export async function loadBrandDetails(brandSlug) {
+  const brands = await loadBrands();
+  const brand = brands.find((item) => getNameSlug(item) === brandSlug);
+  if (!brand) return null;
+  const result = await apiRequest(`/brands/${encodeURIComponent(brand.id)}`);
+  const details = result?.data?.brand || result?.data || brand;
+  return normalizeCollectionItem(details);
+}
+
+export async function loadClothingReviews() {
+  const firstPage = await apiRequest('/reviews?page=1&limit=50');
+  const pageCount = Number(firstPage?.metadata?.numberOfPages || 1);
+  const otherPages = await Promise.all(
+    Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) =>
+      apiRequest(`/reviews?page=${index + 2}&limit=50`),
+    ),
+  );
+  const reviews = [firstPage, ...otherPages].flatMap((result) => {
+    const data = result?.data;
+    if (Array.isArray(data)) return data;
+    return data?.reviews || [];
+  });
+  const products = await loadProducts();
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  return reviews.flatMap((review) => {
+    const productId = String(review.product?._id || review.product?.id || review.product || '');
+    const product = productsById.get(productId);
+    return product ? [{ ...review, product }] : [];
+  });
 }
 
 export const formatPrice = (price) => `$${Number(price || 0).toFixed(2)}`;
