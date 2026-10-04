@@ -32,7 +32,7 @@ function ProductsSection() {
       <div>
         <SearchBar products={products} setVisableProducts={setVisableProducts} />
       </div>
-      {loading ? <p className="shop-empty">Loading equipment...</p> : <ProductsList products={visableProducts} />}
+      {loading ? <p className="shop-empty">Loading products...</p> : <ProductsList products={visableProducts} />}
     </section>
   )
 }

@@ -23,6 +23,7 @@ function CategoriesSection() {
             {categories.map((category) => {
               return (<Link to={`/categories/${slugify(category.name)}`} key={category.id} className="category-card">{category.name}</Link>)
             })}
+            {!categories.length && !error && <p className="shop-empty">Loading categories...</p>}
         </section>
     </>
   )

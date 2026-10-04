@@ -1,23 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ConsultationModal from './ConsultationModal';
+import { loadFeaturedProduct } from '../services/catalog';
 
 function Hero() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [featuredProduct, setFeaturedProduct] = useState(null);
+  const [catalogError, setCatalogError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    loadFeaturedProduct()
+      .then((product) => {
+        if (active) setFeaturedProduct(product);
+      })
+      .catch((error) => {
+        if (active) setCatalogError(error.message || 'Could not load featured products.');
+      });
+    return () => { active = false; };
+  }, []);
 
   return (
     <>
     <br /> <br />
       <section className="hero">
         <div className="hero-text">
-          <h1>Set up a home gym that works for you.</h1>
-          <p>Dumbbells, benches, racks, and the everyday essentials. Find the right gear for the space you have and the way you train.</p>
+          <h1>{featuredProduct ? `Discover ${featuredProduct.title}` : 'Find what you need, all in one place.'}</h1>
+          <p>{featuredProduct?.description || 'Explore products from the Route store and find the right fit for you.'}</p>
+          {catalogError && <p className="form-error" role="alert">{catalogError}</p>}
           <div className="cta-btns">
-            <Link to="/products" className="btn btn-primary">Shop equipment</Link>
+            <Link to="/products" className="btn btn-primary">Shop products</Link>
             <button className="btn" onClick={() => setIsModalOpen(true)}>Ask us a question</button>
           </div>
         </div>
-        <img src="https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=600&h=400&fit=crop" alt="Hero gym image" />
+        {featuredProduct?.image && <img src={featuredProduct.image} alt={featuredProduct.title} />}
       </section>
 
       <ConsultationModal 

@@ -1,8 +1,9 @@
 import { OrderSummary } from "../components/OrderSummary";
 import { useCart } from "../context/CartContext";
+import { Link } from "react-router-dom";
 
 export default function CartPage() {
-  const { items , removeFromCart , addToCart , decreaseQtyFromCart} = useCart();
+  const { items, removeFromCart, addToCart, decreaseQtyFromCart, user, authReady } = useCart();
 
 
   let total = 0;
@@ -11,6 +12,16 @@ export default function CartPage() {
     total = total + (element.price * element.qty )
   }
 
+
+  if (!user) {
+    return (
+      <div className="shop-empty">
+        Sign in to view and manage your Route cart. <Link to="/login">Sign in</Link>
+      </div>
+    );
+  }
+
+  if (!authReady) return <div className="shop-empty">Loading your cart...</div>;
 
   if (!items.length) {
     return (

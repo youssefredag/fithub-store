@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import PropTypes from 'prop-types';
 import { apiRequest, jsonBody } from '../services/api';
+import { normalizeProduct } from '../services/catalog';
 
 const CartContext = createContext();
 
@@ -32,15 +33,55 @@ function unwrapAddresses(result) {
   return [];
 }
 
+function unwrapCart(result) {
+  const cart = result?.data?.cart || result?.data;
+  const entries = cart?.products || cart?.items || [];
+  return {
+    id: cart?._id || cart?.id || '',
+    items: entries.map((entry) => {
+      const product = normalizeProduct(entry.product || entry);
+      return { ...product, qty: Number(entry.count || entry.qty || 1) };
+    }),
+  };
+}
+
+function unwrapWishlist(result) {
+  const data = result?.data;
+  const entries = Array.isArray(data) ? data : data?.wishlist || data?.products || [];
+  return entries.map((entry) => normalizeProduct(entry.product || entry));
+}
+
+function unwrapOrders(result) {
+  const data = result?.data;
+  const entries = Array.isArray(data) ? data : data?.orders || [];
+  return entries.map((order) => {
+    const products = order.cartItems || order.products || order.orderItems || [];
+    return {
+      ...order,
+      id: String(order._id || order.id),
+      createdAt: order.createdAt || order.updatedAt,
+      status: order.isDelivered ? 'Delivered' : order.isPaid ? 'Paid' : order.status || 'Processing',
+      total: Number(order.totalOrderPrice ?? order.totalPrice ?? order.total ?? 0),
+      paymentMethod: order.paymentMethodType === 'cash' ? 'cash' : 'online',
+      address: normalizeAddress(order.shippingAddress || order.address || {}),
+      items: products.map((entry) => ({
+        ...normalizeProduct(entry.product || entry),
+        qty: Number(entry.count || entry.qty || 1),
+      })),
+    };
+  });
+}
+
 export function CartProvider({ children }) {
-  const [items, setItems] = useState(() => readStorage('cart', []));
-  const [wishlist, setWishlist] = useState(() => readStorage('fithub-wishlist', []));
+  const [items, setItems] = useState([]);
+  const [wishlist, setWishlist] = useState([]);
+  const [cartId, setCartId] = useState('');
   const [user, setUser] = useState(() => {
     const savedUser = readStorage('fithub-user', null);
     return savedUser?.token ? savedUser : null;
   });
-  const [addresses, setAddresses] = useState(() => readStorage('fithub-addresses', []));
-  const [orders, setOrders] = useState(() => readStorage('fithub-orders', []));
+  const [addresses, setAddresses] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [apiError, setApiError] = useState('');
   const [authReady, setAuthReady] = useState(() => !readStorage('fithub-user', null)?.token);
 
@@ -57,80 +98,141 @@ export function CartProvider({ children }) {
   useEffect(() => {
     if (!user?.token) {
       setAuthReady(true);
+      setItems([]);
+      setWishlist([]);
+      setCartId('');
+      setAddresses([]);
+      setOrders([]);
       return undefined;
     }
-    let active = true;
 
+    let active = true;
     setAuthReady(false);
-    async function verifySession() {
+    async function loadAccountData() {
       try {
         await apiRequest('/auth/verifyToken', { token: user.token });
+        const requests = [
+          apiRequest('/cart', { token: user.token }),
+          apiRequest('/wishlist', { token: user.token }),
+          apiRequest('/addresses', { token: user.token }),
+          user._id ? apiRequest(`/orders/user/${encodeURIComponent(user._id)}`, { token: user.token }) : Promise.resolve(null),
+        ];
+        const [cartResult, wishlistResult, addressResult, orderResult] = await Promise.allSettled(requests);
         if (!active) return;
-        setAuthReady(true);
-        try {
-          const result = await apiRequest('/addresses', { token: user.token });
-          if (active) setAddresses(unwrapAddresses(result).map(normalizeAddress));
-        } catch (error) {
-          if (active) setApiError(error.message || 'Could not load your saved addresses.');
-        }
+
+        if (cartResult.status === 'fulfilled') {
+          const cart = unwrapCart(cartResult.value);
+          setItems(cart.items);
+          setCartId(cart.id);
+        } else setApiError(cartResult.reason.message || 'Could not load your cart.');
+
+        if (wishlistResult.status === 'fulfilled') setWishlist(unwrapWishlist(wishlistResult.value));
+        else setApiError(wishlistResult.reason.message || 'Could not load your wishlist.');
+
+        if (addressResult.status === 'fulfilled') setAddresses(unwrapAddresses(addressResult.value).map(normalizeAddress));
+        else setApiError(addressResult.reason.message || 'Could not load your saved addresses.');
+
+        if (orderResult.status === 'fulfilled' && orderResult.value) setOrders(unwrapOrders(orderResult.value));
+        else if (orderResult.status === 'rejected') setApiError(orderResult.reason.message || 'Could not load your orders.');
       } catch (error) {
         if (!active) return;
         if (error.status === 401 || error.status === 403) {
           setUser(null);
-          setAddresses([]);
           setApiError('Your session has expired. Please sign in again.');
-        } else {
-          setApiError(error.message || 'Could not verify your session.');
-        }
-        setAuthReady(true);
+        } else setApiError(error.message || 'Could not verify your session.');
+      } finally {
+        if (active) setAuthReady(true);
       }
     }
 
-    verifySession();
+    loadAccountData();
     return () => { active = false; };
   }, [user]);
 
-  function addToCart(product) {
-    setItems((previous) => {
-      const found = previous.find((item) => item.id === product.id);
-      return found
-        ? previous.map((item) => item.id === product.id ? { ...item, qty: item.qty + (product.qty || 1) } : item)
-        : [...previous, { ...product, qty: product.qty || 1 }];
+  async function refreshCart() {
+    if (!user?.token) return false;
+    const result = await apiRequest('/cart', { token: user.token });
+    const cart = unwrapCart(result);
+    setItems(cart.items);
+    setCartId(cart.id);
+    return true;
+  }
+
+  function requireAccount() {
+    if (user?.token) return true;
+    setApiError('Please sign in before adding items to your cart or wishlist.');
+    return false;
+  }
+
+  async function addToCart(product) {
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      const current = items.find((item) => item.id === String(product.id));
+      const nextQuantity = (current?.qty || 0) + Number(product.qty || 1);
+      await apiRequest('/cart', {
+        method: 'POST',
+        token: user.token,
+        body: jsonBody({ productId: product.id }),
+      });
+      if (nextQuantity > 1) {
+        await apiRequest(`/cart/${encodeURIComponent(product.id)}`, {
+          method: 'PUT',
+          token: user.token,
+          body: jsonBody({ count: nextQuantity }),
+        });
+      }
+      await refreshCart();
+      return true;
     });
   }
 
-  function removeFromCart(id) {
-    setItems((previous) => previous.filter((item) => item.id !== id));
+  async function removeFromCart(id) {
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      await apiRequest(`/cart/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token });
+      await refreshCart();
+      return true;
+    });
   }
 
-  function updateCartQuantity(id, quantity) {
+  async function updateCartQuantity(id, quantity) {
     const safeQuantity = Math.floor(Number(quantity));
-    if (!Number.isFinite(safeQuantity) || safeQuantity <= 0) {
-      removeFromCart(id);
-      return;
-    }
-    setItems((previous) => previous.map((item) => item.id === id ? { ...item, qty: safeQuantity } : item));
+    if (!Number.isFinite(safeQuantity) || safeQuantity <= 0) return removeFromCart(id);
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      await apiRequest(`/cart/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        token: user.token,
+        body: jsonBody({ count: safeQuantity }),
+      });
+      await refreshCart();
+      return true;
+    });
   }
 
   function decreaseQtyFromCart(id) {
-    const found = items.find((item) => item.id === id);
-    if (found) updateCartQuantity(id, found.qty - 1);
+    const found = items.find((item) => item.id === String(id));
+    if (found) return updateCartQuantity(id, found.qty - 1);
+    return null;
   }
 
-  function toggleWishlist(product) {
-    const exists = wishlist.some((item) => item.id === product.id);
-    setWishlist((previous) => exists
-      ? previous.filter((item) => item.id !== product.id)
-      : [...previous, product]);
+  async function toggleWishlist(product) {
+    if (!requireAccount()) return null;
+    const exists = wishlist.some((item) => item.id === String(product.id));
+    return reportRequest(async () => {
+      await apiRequest(exists ? `/wishlist/${encodeURIComponent(product.id)}` : '/wishlist', {
+        method: exists ? 'DELETE' : 'POST',
+        token: user.token,
+        ...(exists ? {} : { body: jsonBody({ productId: product.id }) }),
+      });
+      const result = await apiRequest('/wishlist', { token: user.token });
+      setWishlist(unwrapWishlist(result));
+      return true;
+    });
   }
 
   async function saveAddress(address) {
-    if (!user?.token) {
-      setAddresses((previous) => address.id
-        ? previous.map((item) => item.id === address.id ? { ...address } : item)
-        : [...previous, { ...address, id: crypto.randomUUID() }]);
-      return true;
-    }
+    if (!requireAccount()) return null;
     return reportRequest(async () => {
       const result = await apiRequest('/addresses', {
         method: 'POST',
@@ -156,10 +258,7 @@ export function CartProvider({ children }) {
   }
 
   function removeAddress(id) {
-    if (!user?.token) {
-      setAddresses((previous) => previous.filter((address) => address.id !== id));
-      return;
-    }
+    if (!requireAccount()) return;
     void reportRequest(async () => {
       await apiRequest(`/addresses/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token });
       setAddresses((previous) => previous.filter((address) => address.id !== id));
@@ -168,18 +267,53 @@ export function CartProvider({ children }) {
   }
 
   async function placeOrder({ address, paymentMethod }) {
-    const order = {
-      id: `FH-${Date.now().toString().slice(-8)}`,
-      createdAt: new Date().toISOString(),
-      items,
-      total: items.reduce((sum, item) => sum + item.price * item.qty, 0),
-      address,
-      paymentMethod,
-      status: 'Processing',
-    };
-    setOrders((previous) => [order, ...previous]);
-    setItems([]);
-    return order;
+    if (!requireAccount()) return null;
+    return reportRequest(async () => {
+      let currentCartId = cartId;
+      if (!currentCartId) {
+        const cartResult = await apiRequest('/cart', { token: user.token });
+        const cart = unwrapCart(cartResult);
+        currentCartId = cart.id;
+        setItems(cart.items);
+        setCartId(cart.id);
+      }
+      if (!currentCartId) throw new Error('Your server cart is empty. Refresh the page and try again.');
+
+      const shippingAddress = {
+        details: address['street-address'] || address.details,
+        phone: address.phone,
+        city: address.city,
+        ...(address['postal-code'] ? { postalCode: address['postal-code'] } : {}),
+      };
+
+      if (paymentMethod === 'online') {
+        const query = new URLSearchParams({ url: `${window.location.origin}/orders` });
+        const result = await apiRequest(`/orders/checkout-session/${encodeURIComponent(currentCartId)}?${query}`, {
+          method: 'POST',
+          token: user.token,
+          body: jsonBody({ shippingAddress }),
+        });
+        const checkoutUrl = result?.session?.url || result?.data?.session?.url || result?.data?.url || result?.url;
+        if (!checkoutUrl) throw new Error('The server did not return an online payment link.');
+        window.location.assign(checkoutUrl);
+        return { redirecting: true };
+      }
+
+      const result = await apiRequest(`/orders/${encodeURIComponent(currentCartId)}`, {
+        method: 'POST',
+        token: user.token,
+        body: jsonBody({ shippingAddress }),
+      });
+      const order = result?.data?.order || result?.data;
+      if (user._id) {
+        const refreshedOrders = await apiRequest(`/orders/user/${encodeURIComponent(user._id)}`, { token: user.token });
+        setOrders(unwrapOrders(refreshedOrders));
+      } else {
+        setOrders((previous) => [order, ...previous]);
+      }
+      await refreshCart();
+      return order;
+    });
   }
 
   function signIn(profile) {
@@ -189,27 +323,20 @@ export function CartProvider({ children }) {
       name: profile.name || profile.firstName || profile.email?.split('@')[0] || 'Customer',
     };
     setUser(nextUser);
-    setAuthReady(true);
+    setAuthReady(false);
     return nextUser;
   }
 
   function signOut() {
     setUser(null);
-    setAddresses([]);
     setApiError('');
     setAuthReady(true);
   }
 
   useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(items));
-  }, [items]);
-  useEffect(() => localStorage.setItem('fithub-wishlist', JSON.stringify(wishlist)), [wishlist]);
-  useEffect(() => {
     if (user) localStorage.setItem('fithub-user', JSON.stringify(user));
     else localStorage.removeItem('fithub-user');
   }, [user]);
-  useEffect(() => localStorage.setItem('fithub-addresses', JSON.stringify(addresses)), [addresses]);
-  useEffect(() => localStorage.setItem('fithub-orders', JSON.stringify(orders)), [orders]);
 
   return (
     <CartContext.Provider value={{
