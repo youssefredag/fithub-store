@@ -35,6 +35,7 @@ function App() {
         <Route path='/brands/:brand' element={<CatalogPage mode='brand-detail' />} />
         <Route path='/categories' element={<CatalogPage mode='categories' />} />
         <Route path='/categories/:category' element={<CatalogPage mode='category-detail' />} />
+        <Route path='/products-category/:category' element={<CatalogPage mode='category-detail' />} />
         <Route path='/prodcuts-category/:category' element={<CatalogPage mode='category-detail' />} />
         <Route path='/cart' element={<CartPage />} />
         <Route path='/wishlist' element={<WishlistPage />} />

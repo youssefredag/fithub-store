@@ -4,6 +4,7 @@ import { apiRequest, jsonBody } from '../services/api';
 import { normalizeProduct } from '../services/catalog';
 
 const CartContext = createContext();
+const GUEST_CART_STORAGE_KEY = 'fithub-guest-cart';
 
 function readStorage(key, fallback) {
   try {
@@ -12,6 +13,17 @@ function readStorage(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function readGuestCart() {
+  const storedItems = readStorage(GUEST_CART_STORAGE_KEY, []);
+  if (!Array.isArray(storedItems)) return [];
+  return storedItems.flatMap((item) => {
+    const id = item?._id || item?.id;
+    const qty = Math.floor(Number(item?.qty || 1));
+    if (!id || !Number.isFinite(qty) || qty < 1) return [];
+    return [{ ...normalizeProduct(item), id: String(id), qty }];
+  });
 }
 
 function normalizeAddress(address) {
@@ -76,7 +88,9 @@ function unwrapOrders(result) {
 }
 
 export function CartProvider({ children }) {
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(() =>
+    readStorage('fithub-user', null)?.token ? [] : readGuestCart(),
+  );
   const [wishlist, setWishlist] = useState([]);
   const [cartId, setCartId] = useState('');
   const [cartTotal, setCartTotal] = useState(0);
@@ -104,7 +118,7 @@ export function CartProvider({ children }) {
   useEffect(() => {
     if (!user?.token) {
       setAuthReady(true);
-      setItems([]);
+      setItems(readGuestCart());
       setWishlist([]);
       setCartId('');
       setCartTotal(0);
@@ -130,7 +144,41 @@ export function CartProvider({ children }) {
         if (!active) return;
 
         if (cartResult.status === 'fulfilled') {
-          const cart = unwrapCart(cartResult.value);
+          let cart = unwrapCart(cartResult.value);
+          const guestItems = readGuestCart();
+          for (const guestItem of guestItems) {
+            const current = cart.items.find((item) => item.id === guestItem.id);
+            const nextQuantity = (current?.qty || 0) + guestItem.qty;
+            if (current) {
+              await apiRequest(`/cart/${encodeURIComponent(guestItem.id)}`, {
+                method: 'PUT',
+                token: user.token,
+                version: 2,
+                body: jsonBody({ count: nextQuantity }),
+              });
+            } else {
+              await apiRequest('/cart', {
+                method: 'POST',
+                token: user.token,
+                version: 2,
+                body: jsonBody({ productId: guestItem.id }),
+              });
+              if (guestItem.qty > 1) {
+                await apiRequest(`/cart/${encodeURIComponent(guestItem.id)}`, {
+                  method: 'PUT',
+                  token: user.token,
+                  version: 2,
+                  body: jsonBody({ count: guestItem.qty }),
+                });
+              }
+            }
+            cart.items = cart.items.filter((item) => item.id !== guestItem.id);
+            cart.items.push({ ...guestItem, qty: nextQuantity });
+          }
+          if (guestItems.length) {
+            cart = unwrapCart(await apiRequest('/cart', { token: user.token, version: 2 }));
+            localStorage.removeItem(GUEST_CART_STORAGE_KEY);
+          }
           setItems(cart.items);
           setCartId(cart.id);
           setCartTotal(cart.total);
@@ -151,7 +199,7 @@ export function CartProvider({ children }) {
         if (error.status === 401 || error.status === 403) {
           setUser(null);
           setApiError('Your session has expired. Please sign in again.');
-        } else setApiError(error.message || 'Could not verify your session.');
+        } else setApiError(error.message || 'Could not load your account data.');
       } finally {
         if (active) setAuthReady(true);
       }
@@ -180,18 +228,41 @@ export function CartProvider({ children }) {
   }
 
   async function addToCart(product) {
-    if (!requireAccount()) return null;
+    const productId = product?._id || product?.id;
+    if (!productId) {
+      setApiError('This product cannot be added to your cart because it has no product ID.');
+      return null;
+    }
+    const quantity = Math.floor(Number(product.qty ?? 1));
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      setApiError('Enter a valid quantity before adding this product to your cart.');
+      return null;
+    }
+    if (!user?.token) {
+      const id = String(productId);
+      setApiError('');
+      setItems((currentItems) => {
+        const current = currentItems.find((item) => item.id === id);
+        if (current) {
+          return currentItems.map((item) =>
+            item.id === id ? { ...item, qty: item.qty + quantity } : item,
+          );
+        }
+        return [...currentItems, { ...normalizeProduct(product), id, qty: quantity }];
+      });
+      return true;
+    }
     return reportRequest(async () => {
-      const current = items.find((item) => item.id === String(product.id));
-      const nextQuantity = (current?.qty || 0) + Number(product.qty || 1);
+      const current = items.find((item) => item.id === String(productId));
+      const nextQuantity = (current?.qty || 0) + quantity;
       await apiRequest('/cart', {
         method: 'POST',
         token: user.token,
         version: 2,
-        body: jsonBody({ productId: product.id }),
+        body: jsonBody({ productId }),
       });
       if (nextQuantity > 1) {
-        await apiRequest(`/cart/${encodeURIComponent(product.id)}`, {
+        await apiRequest(`/cart/${encodeURIComponent(productId)}`, {
           method: 'PUT',
           token: user.token,
           version: 2,
@@ -204,7 +275,11 @@ export function CartProvider({ children }) {
   }
 
   async function removeFromCart(id) {
-    if (!requireAccount()) return null;
+    if (!user?.token) {
+      setItems((currentItems) => currentItems.filter((item) => item.id !== String(id)));
+      setApiError('');
+      return true;
+    }
     return reportRequest(async () => {
       await apiRequest(`/cart/${encodeURIComponent(id)}`, { method: 'DELETE', token: user.token, version: 2 });
       await refreshCart();
@@ -215,7 +290,13 @@ export function CartProvider({ children }) {
   async function updateCartQuantity(id, quantity) {
     const safeQuantity = Math.floor(Number(quantity));
     if (!Number.isFinite(safeQuantity) || safeQuantity <= 0) return removeFromCart(id);
-    if (!requireAccount()) return null;
+    if (!user?.token) {
+      setItems((currentItems) => currentItems.map((item) =>
+        item.id === String(id) ? { ...item, qty: safeQuantity } : item,
+      ));
+      setApiError('');
+      return true;
+    }
     return reportRequest(async () => {
       await apiRequest(`/cart/${encodeURIComponent(id)}`, {
         method: 'PUT',
@@ -235,7 +316,11 @@ export function CartProvider({ children }) {
   }
 
   async function clearCart() {
-    if (!requireAccount()) return null;
+    if (!user?.token) {
+      setItems([]);
+      setApiError('');
+      return true;
+    }
     return reportRequest(async () => {
       await apiRequest('/cart', { method: 'DELETE', token: user.token, version: 2 });
       setItems([]);
@@ -457,6 +542,10 @@ export function CartProvider({ children }) {
     if (user) localStorage.setItem('fithub-user', JSON.stringify(user));
     else localStorage.removeItem('fithub-user');
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.token) localStorage.setItem(GUEST_CART_STORAGE_KEY, JSON.stringify(items));
+  }, [items, user]);
 
   return (
     <CartContext.Provider value={{

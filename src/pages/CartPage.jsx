@@ -15,7 +15,9 @@ export default function CartPage() {
 
   const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
   const subtotal = cartTotal || calculatedTotal;
-  const total = cartTotalAfterDiscount < subtotal ? cartTotalAfterDiscount : subtotal;
+  const total = cartTotalAfterDiscount > 0 && cartTotalAfterDiscount < subtotal
+    ? cartTotalAfterDiscount
+    : subtotal;
 
   async function submitCoupon(event) {
     event.preventDefault();
@@ -30,15 +32,7 @@ export default function CartPage() {
   }
 
 
-  if (!user) {
-    return (
-      <div className="shop-empty">
-        Sign in to view and manage your Route cart. <Link to="/login">Sign in</Link>
-      </div>
-    );
-  }
-
-  if (!authReady) return <div className="shop-empty">Loading your cart...</div>;
+  if (user && !authReady) return <div className="shop-empty">Loading your cart...</div>;
 
   if (!items.length) {
     return (
@@ -81,14 +75,17 @@ export default function CartPage() {
       </div>
 
       <form className="cart-coupon" onSubmit={submitCoupon}>
-        <label htmlFor="cart-coupon">Coupon code</label>
-        <div><input id="cart-coupon" value={coupon} onChange={(event) => setCoupon(event.target.value)} placeholder="Enter coupon code" /><button className="button button-small" type="submit" disabled={couponBusy}>{couponBusy ? 'Applying...' : 'Apply'}</button></div>
-        {appliedCoupon && <p className="form-message">Applied: {appliedCoupon}</p>}
-        {notice && <p className="form-message" role="status">{notice}</p>}
+        {user ? <>
+          <label htmlFor="cart-coupon">Coupon code</label>
+          <div><input id="cart-coupon" value={coupon} onChange={(event) => setCoupon(event.target.value)} placeholder="Enter coupon code" /><button className="button button-small" type="submit" disabled={couponBusy}>{couponBusy ? 'Applying...' : 'Apply'}</button></div>
+          {appliedCoupon && <p className="form-message">Applied: {appliedCoupon}</p>}
+          {notice && <p className="form-message" role="status">{notice}</p>}
+        </> : <p>Sign in to apply a coupon or continue to checkout. <Link to="/login">Sign in</Link></p>}
         <button className="text-button" type="button" onClick={() => clearCart()}>Clear cart</button>
       </form>
 
       <OrderSummary total={total} />
+      {!user && <p className="shop-empty">Your cart is saved in this browser. <Link to="/login">Sign in</Link> to sync it and check out.</p>}
     </div>
   );
 }
