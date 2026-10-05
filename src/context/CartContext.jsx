@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from 'react';
 import PropTypes from 'prop-types';
 import { apiRequest, jsonBody } from '../services/api';
-import { normalizeProduct } from '../services/catalog';
+import { normalizeProduct, parsePrice } from '../services/catalog';
 
 const CartContext = createContext();
 const GUEST_CART_STORAGE_KEY = 'fithub-guest-cart';
@@ -48,16 +49,58 @@ function unwrapAddresses(result) {
 function unwrapCart(result) {
   const cart = result?.data?.cart || result?.data;
   const entries = cart?.products || cart?.items || [];
+  const items = entries.map((entry) => {
+    const product = entry.product || entry;
+    const rawPrice = entry.price ?? product.price;
+    const quantity = Math.floor(Number(entry.count ?? entry.qty ?? 1));
+    const normalized = normalizeProduct({
+      ...product,
+      price: rawPrice,
+    });
+    return {
+      ...normalized,
+      qty: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      priceMissing: rawPrice == null,
+    };
+  });
+  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const reportedTotal = Number(cart?.totalCartPrice ?? cart?.total);
+  const total = Number.isFinite(reportedTotal) && (reportedTotal > 0 || calculatedTotal === 0)
+    ? reportedTotal
+    : calculatedTotal;
+  const reportedDiscountedTotal = cart?.totalCartPriceAfterDiscount ?? cart?.totalAfterDiscount;
+
   return {
-    id: cart?._id || cart?.id || '',
-    total: Number(cart?.totalCartPrice ?? cart?.total ?? 0),
-    totalAfterDiscount: Number(cart?.totalCartPriceAfterDiscount ?? cart?.totalAfterDiscount ?? cart?.totalCartPrice ?? cart?.total ?? 0),
+    id: cart?._id || cart?.id || result?.cartId || '',
+    total,
+    totalAfterDiscount: reportedDiscountedTotal == null ? total : parsePrice(reportedDiscountedTotal),
     coupon: cart?.appliedCoupon?.name || cart?.coupon?.name || '',
-    items: entries.map((entry) => {
-      const product = normalizeProduct(entry.product || entry);
-      return { ...product, qty: Number(entry.count || entry.qty || 1) };
-    }),
+    items,
   };
+}
+
+async function hydrateCartPrices(cart, token) {
+  const items = await Promise.all(cart.items.map(async ({ priceMissing, ...item }) => {
+    if (!priceMissing) return item;
+    const result = await apiRequest(`/products/${encodeURIComponent(item.id)}`, { token });
+    const product = result?.data?.product || result?.data;
+    if (!product || product.price == null) {
+      throw new Error(`Could not load the price for ${item.title}. Please refresh the cart.`);
+    }
+    return { ...normalizeProduct(product), qty: item.qty };
+  }));
+  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  return {
+    ...cart,
+    items,
+    total: cart.total || calculatedTotal,
+    totalAfterDiscount: cart.totalAfterDiscount || cart.total || calculatedTotal,
+  };
+}
+
+async function requestCart(token) {
+  const result = await apiRequest('/cart', { token, version: 2 });
+  return hydrateCartPrices(unwrapCart(result), token);
 }
 
 function unwrapWishlist(result) {
@@ -71,19 +114,52 @@ function unwrapOrders(result) {
   const entries = Array.isArray(data) ? data : data?.orders || [];
   return entries.map((order) => {
     const products = order.cartItems || order.products || order.orderItems || [];
+    const items = products.map((entry) => ({
+      ...normalizeProduct({
+        ...(entry.product || entry),
+        price: entry.price ?? entry.product?.price,
+      }),
+      qty: Number(entry.count || entry.qty || 1),
+    }));
+    const derivedTotal = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
+    const shipping = Number(order.shippingPrice) || 0;
+    const tax = Number(order.taxPrice) || 0;
+    const total = Number(order.totalOrderPrice ?? order.totalPrice ?? order.total ?? (derivedTotal + shipping + tax));
+
     return {
       ...order,
       id: String(order._id || order.id),
       createdAt: order.createdAt || order.updatedAt,
       status: order.isDelivered ? 'Delivered' : order.isPaid ? 'Paid' : order.status || 'Processing',
-      total: Number(order.totalOrderPrice ?? order.totalPrice ?? order.total ?? 0),
+      total: Number.isFinite(total) ? total : derivedTotal,
+      subtotal: derivedTotal,
+      shipping,
+      tax,
       paymentMethod: order.paymentMethodType === 'cash' ? 'cash' : 'online',
       address: normalizeAddress(order.shippingAddress || order.address || {}),
-      items: products.map((entry) => ({
-        ...normalizeProduct(entry.product || entry),
-        qty: Number(entry.count || entry.qty || 1),
-      })),
+      items,
     };
+  });
+}
+
+function resolveUserId(profile) {
+  return profile?._id || profile?.id || profile?.user?._id || profile?.user?.id || '';
+}
+
+function unwrapUserOrders(result, profile) {
+  const data = result?.data;
+  const entries = Array.isArray(data) ? data : data?.orders || [];
+  const userId = String(resolveUserId(profile)).toLowerCase();
+  const email = String(profile?.email || profile?.user?.email || '').toLowerCase();
+  const userOrders = entries.filter((order) => {
+    const orderUserId = String(order?.user?._id || order?.user?.id || '').toLowerCase();
+    const orderEmail = String(order?.user?.email || '').toLowerCase();
+    return (userId && orderUserId === userId) || (email && orderEmail === email);
+  });
+  return unwrapOrders({ data: userOrders }).sort((a, b) => {
+    const dateA = Date.parse(a.createdAt || '') || 0;
+    const dateB = Date.parse(b.createdAt || '') || 0;
+    return dateB - dateA;
   });
 }
 
@@ -134,17 +210,32 @@ export function CartProvider({ children }) {
     async function loadAccountData() {
       try {
         await apiRequest('/auth/verifyToken', { token: user.token });
+
+        const meResult = await apiRequest('/users/getMe', { token: user.token });
+        const meProfile = meResult?.data || meResult || {};
+        const resolvedUser = {
+          ...user,
+          ...meProfile,
+          _id: resolveUserId({ ...user, ...meProfile }),
+          id: resolveUserId({ ...user, ...meProfile }),
+          token: user.token,
+        };
+
+        if (!user?._id && !user?.id && (resolvedUser._id || resolvedUser.id)) {
+          setUser((previous) => ({ ...(previous || {}), ...resolvedUser, _id: resolvedUser._id || resolvedUser.id, id: resolvedUser._id || resolvedUser.id, token: user.token }));
+        }
+
         const requests = [
-          apiRequest('/cart', { token: user.token, version: 2 }),
+          requestCart(user.token),
           apiRequest('/wishlist', { token: user.token }),
           apiRequest('/addresses', { token: user.token }),
-          user._id ? apiRequest(`/orders/user/${encodeURIComponent(user._id)}`, { token: user.token }) : Promise.resolve(null),
+          apiRequest('/orders', { token: user.token }),
         ];
         const [cartResult, wishlistResult, addressResult, orderResult] = await Promise.allSettled(requests);
         if (!active) return;
 
         if (cartResult.status === 'fulfilled') {
-          let cart = unwrapCart(cartResult.value);
+          let cart = cartResult.value;
           const guestItems = readGuestCart();
           for (const guestItem of guestItems) {
             const current = cart.items.find((item) => item.id === guestItem.id);
@@ -176,7 +267,7 @@ export function CartProvider({ children }) {
             cart.items.push({ ...guestItem, qty: nextQuantity });
           }
           if (guestItems.length) {
-            cart = unwrapCart(await apiRequest('/cart', { token: user.token, version: 2 }));
+            cart = await requestCart(user.token);
             localStorage.removeItem(GUEST_CART_STORAGE_KEY);
           }
           setItems(cart.items);
@@ -192,8 +283,11 @@ export function CartProvider({ children }) {
         if (addressResult.status === 'fulfilled') setAddresses(unwrapAddresses(addressResult.value).map(normalizeAddress));
         else setApiError(addressResult.reason.message || 'Could not load your saved addresses.');
 
-        if (orderResult.status === 'fulfilled' && orderResult.value) setOrders(unwrapOrders(orderResult.value));
-        else if (orderResult.status === 'rejected') setApiError(orderResult.reason.message || 'Could not load your orders.');
+        if (orderResult.status === 'fulfilled') {
+          setOrders(unwrapUserOrders(orderResult.value, { ...user, ...meProfile }));
+        } else if (orderResult.status === 'rejected') {
+          setApiError(orderResult.reason.message || 'Could not load your orders.');
+        }
       } catch (error) {
         if (!active) return;
         if (error.status === 401 || error.status === 403) {
@@ -211,8 +305,7 @@ export function CartProvider({ children }) {
 
   async function refreshCart() {
     if (!user?.token) return false;
-    const result = await apiRequest('/cart', { token: user.token, version: 2 });
-    const cart = unwrapCart(result);
+    const cart = await requestCart(user.token);
     setItems(cart.items);
     setCartId(cart.id);
     setCartTotal(cart.total);
@@ -253,21 +346,30 @@ export function CartProvider({ children }) {
       return true;
     }
     return reportRequest(async () => {
-      const current = items.find((item) => item.id === String(productId));
-      const nextQuantity = (current?.qty || 0) + quantity;
-      await apiRequest('/cart', {
-        method: 'POST',
-        token: user.token,
-        version: 2,
-        body: jsonBody({ productId }),
-      });
-      if (nextQuantity > 1) {
+      const latestCart = await requestCart(user.token);
+      const current = latestCart.items.find((item) => item.id === String(productId));
+      if (current) {
         await apiRequest(`/cart/${encodeURIComponent(productId)}`, {
           method: 'PUT',
           token: user.token,
           version: 2,
-          body: jsonBody({ count: nextQuantity }),
+          body: jsonBody({ count: current.qty + quantity }),
         });
+      } else {
+        await apiRequest('/cart', {
+          method: 'POST',
+          token: user.token,
+          version: 2,
+          body: jsonBody({ productId }),
+        });
+        if (quantity > 1) {
+          await apiRequest(`/cart/${encodeURIComponent(productId)}`, {
+            method: 'PUT',
+            token: user.token,
+            version: 2,
+            body: jsonBody({ count: quantity }),
+          });
+        }
       }
       await refreshCart();
       return true;
@@ -346,14 +448,12 @@ export function CartProvider({ children }) {
         version: 2,
         body: jsonBody({ couponName: safeCouponName }),
       });
-      const cart = unwrapCart(result);
-      if (cart.items.length) {
-        setItems(cart.items);
-        setCartId(cart.id || cartId);
-      } else await refreshCart();
+      const cart = await hydrateCartPrices(unwrapCart(result), user.token);
+      setItems(cart.items);
+      setCartId(cart.id || cartId);
       setCartTotal(cart.total);
       setCartTotalAfterDiscount(cart.totalAfterDiscount);
-      setAppliedCoupon(safeCouponName);
+      setAppliedCoupon(cart.coupon || safeCouponName);
       return true;
     });
   }
@@ -451,8 +551,7 @@ export function CartProvider({ children }) {
     return reportRequest(async () => {
       let currentCartId = cartId;
       if (!currentCartId) {
-        const cartResult = await apiRequest('/cart', { token: user.token, version: 2 });
-        const cart = unwrapCart(cartResult);
+        const cart = await requestCart(user.token);
         currentCartId = cart.id;
         setItems(cart.items);
         setCartId(cart.id);
@@ -488,23 +587,35 @@ export function CartProvider({ children }) {
         version: 2,
         body: jsonBody({ shippingAddress }),
       });
-      const order = result?.data?.order || result?.data;
-      if (user._id) {
-        const refreshedOrders = await apiRequest(`/orders/user/${encodeURIComponent(user._id)}`, { token: user.token });
-        setOrders(unwrapOrders(refreshedOrders));
-      } else {
-        setOrders((previous) => [order, ...previous]);
+      const order = result?.data?.order || result?.data || null;
+      if (!order) {
+        throw new Error('The order could not be confirmed by the server. Please try again.');
+      }
+      const createdOrder = unwrapOrders({ data: [order] })[0];
+      setOrders((previous) => [
+        createdOrder,
+        ...previous.filter((existing) => existing.id !== createdOrder.id),
+      ]);
+      try {
+        const refreshedOrders = await apiRequest('/orders', { token: user.token });
+        setOrders(unwrapUserOrders(refreshedOrders, user));
+      } catch (error) {
+        setApiError(error.message || 'Your order was placed, but the order list could not be refreshed.');
       }
       await refreshCart();
-      return order;
+      return createdOrder;
     });
   }
 
   function signIn(profile) {
+    const source = profile?.user || profile || {};
     const nextUser = {
+      ...source,
       ...profile,
-      _id: profile._id || profile.id,
-      name: profile.name || profile.firstName || profile.email?.split('@')[0] || 'Customer',
+      _id: resolveUserId({ ...source, ...profile }) || source._id || source.id || profile?._id || profile?.id,
+      id: resolveUserId({ ...source, ...profile }) || source._id || source.id || profile?._id || profile?.id,
+      name: source.name || profile?.name || source.firstName || profile?.firstName || source.email?.split('@')[0] || profile?.email?.split('@')[0] || 'Customer',
+      token: profile?.token || source.token,
     };
     setUser(nextUser);
     setAuthReady(false);

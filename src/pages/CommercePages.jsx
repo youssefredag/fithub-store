@@ -58,6 +58,19 @@ function ProductTile({ product }) {
   const { addToCart, wishlist, toggleWishlist } = useCart();
   const saved = wishlist.some((item) => item.id === product.id);
   const image = product.image || product.images?.[0];
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+
+  async function handleAddToCart() {
+    setAdding(true);
+    setAdded(false);
+    try {
+      const result = await addToCart({ ...product, image });
+      if (result) setAdded(true);
+    } finally {
+      setAdding(false);
+    }
+  }
 
   return (
     <article className="shop-product">
@@ -74,7 +87,9 @@ function ProductTile({ product }) {
         <p className="shop-rating">{product.rating ? <><FaStar /> {Number(product.rating).toFixed(1)}</> : 'Not rated yet'}</p>
         <div className="shop-product-footer">
           <strong>{formatPrice(product.price)}</strong>
-          <button className="button button-small" type="button" onClick={() => addToCart({ ...product, image })}>Add to cart</button>
+          <button className="button button-small" type="button" onClick={handleAddToCart} disabled={adding}>
+            {adding ? 'Adding...' : added ? 'Added to cart' : 'Add to cart'}
+          </button>
         </div>
       </div>
     </article>
@@ -420,8 +435,16 @@ export function CheckoutPage() {
   const navigate = useNavigate();
   const [payment, setPayment] = useState('cash');
   const [selectedAddressId, setSelectedAddressId] = useState('');
+  const [addressValues, setAddressValues] = useState({
+    'full-name': '',
+    phone: '',
+    'street-address': '',
+    city: '',
+    'postal-code': '',
+  });
   const [submitting, setSubmitting] = useState(false);
-  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const selectedAddress = addresses.find((saved) => saved.id === selectedAddressId) || null;
+  const calculatedTotal = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
   const subtotal = cartTotal || calculatedTotal;
   const total = cartTotalAfterDiscount < subtotal ? cartTotalAfterDiscount : subtotal;
   if (!user) return <section className="shop-page shop-empty-page"><h1>Sign in to check out</h1><p>Your cart and orders are managed by your Route account.</p><Link className="button" to="/login">Sign in</Link></section>;
@@ -448,10 +471,30 @@ export function CheckoutPage() {
   return (
     <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">FitHub / Checkout</p><h1>Delivery & payment</h1><p>Choose a delivery address and complete your order.</p></div>
       <form className="checkout-layout" onSubmit={submit}>
-        <div className="checkout-fields"><fieldset className="checkout-fieldset"><legend>Delivery address</legend>{addresses.length > 0 && <label className="saved-address-select">Saved address<select name="saved-address" value={selectedAddressId} onChange={(event) => setSelectedAddressId(event.target.value)}><option value="">Enter a new address</option>{addresses.map((address) => <option key={address.id} value={address.id}>{address['full-name']} — {address.city}</option>)}</select></label>}<div className="checkout-address-grid">{[['full-name', 'Full name'], ['phone', 'Phone'], ['street-address', 'Street address'], ['city', 'City'], ['postal-code', 'Postal code']].map(([name, label]) => <label key={name}>{label}<input name={name} required={!selectedAddressId} disabled={Boolean(selectedAddressId)} /></label>)}</div></fieldset>
+        <div className="checkout-fields"><fieldset className="checkout-fieldset"><legend>Delivery address</legend>{addresses.length > 0 && <label className="saved-address-select">Saved address<select name="saved-address" value={selectedAddressId} onChange={(event) => {
+          setSelectedAddressId(event.target.value);
+          if (!event.target.value) {
+            setAddressValues({
+              'full-name': '',
+              phone: '',
+              'street-address': '',
+              city: '',
+              'postal-code': '',
+            });
+          }
+        }}><option value="">Enter a new address</option>{addresses.map((address) => <option key={address.id} value={address.id}>{address['full-name']} — {address.city}</option>)}</select></label>}<div className="checkout-address-grid">{[['full-name', 'Full name'], ['phone', 'Phone'], ['street-address', 'Street address'], ['city', 'City'], ['postal-code', 'Postal code']].map(([name, label]) => {
+          const valueMap = {
+            'full-name': selectedAddress?.['full-name'] || '',
+            phone: selectedAddress?.phone || '',
+            'street-address': selectedAddress?.['street-address'] || '',
+            city: selectedAddress?.city || '',
+            'postal-code': selectedAddress?.['postal-code'] || '',
+          };
+          return <label key={name}>{label}<input name={name} required={!selectedAddressId} disabled={Boolean(selectedAddressId)} value={selectedAddress ? valueMap[name] : addressValues[name]} onChange={(event) => setAddressValues((current) => ({ ...current, [name]: event.target.value }))} /></label>;
+        })}</div></fieldset>
           <fieldset className="checkout-fieldset"><legend>Payment method</legend><label className="payment-choice"><input type="radio" name="payment" checked={payment === 'cash'} onChange={() => setPayment('cash')} /><span><strong>Cash on delivery</strong><small>Pay when your order arrives</small></span></label><label className="payment-choice"><input type="radio" name="payment" checked={payment === 'online'} onChange={() => setPayment('online')} /><span><strong>Online payment</strong><small>Pay securely through the Route checkout</small></span></label></fieldset>
         </div>
-        <aside className="checkout-summary"><h2>Order summary</h2>{items.map((item) => <p className="summary-row" key={item.id}><span>{item.title} × {item.qty}</span><strong>{formatPrice(item.price * item.qty)}</strong></p>)}{appliedCoupon && <p className="form-message">Coupon applied: {appliedCoupon}</p>}{total < subtotal && <p className="summary-row"><span>Discount</span><strong>−{formatPrice(subtotal - total)}</strong></p>}<p className="summary-total"><span>Total</span><strong>{formatPrice(total)}</strong></p><button className="button" type="submit" disabled={submitting}>{submitting ? 'Processing...' : payment === 'online' ? 'Continue to payment' : 'Place order'}</button></aside>
+        <aside className="checkout-summary"><h2>Order summary</h2>{items.map((item) => <p className="summary-row" key={item.id}><span>{item.title} × {item.qty}</span><strong>{formatPrice((Number(item.price) || 0) * (Number(item.qty) || 0))}</strong></p>)}{appliedCoupon && <p className="form-message">Coupon applied: {appliedCoupon}</p>}{total < subtotal && <p className="summary-row"><span>Discount</span><strong>−{formatPrice(subtotal - total)}</strong></p>}<p className="summary-total"><span>Total</span><strong>{formatPrice(total)}</strong></p><button className="button" type="submit" disabled={submitting}>{submitting ? 'Processing...' : payment === 'online' ? 'Continue to payment' : 'Place order'}</button></aside>
       </form>
     </section>
   );
@@ -459,7 +502,12 @@ export function CheckoutPage() {
 
 export function OrdersPage() {
   const { orders, user, authReady } = useCart();
-  return <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Purchases</p><h1>Orders</h1><p>Track your orders from the Route store.</p><nav className="account-links"><Link to="/addresses">Manage addresses</Link><Link to="/change-password">Change password</Link></nav></div>{!user ? <div className="shop-empty">Sign in to view your orders. <Link to="/login">Sign in</Link></div> : !authReady ? <div className="shop-empty">Loading your orders...</div> : orders.length ? <div className="order-list">{orders.map((order) => <article className="order-entry" key={order.id}><div className="order-entry-heading"><div><p className="shop-eyebrow">Order {order.id}</p><h2>{new Date(order.createdAt).toLocaleDateString()}</h2></div><span className="order-status">{order.status}</span></div><p>{order.items.reduce((sum, item) => sum + item.qty, 0)} items · {order.paymentMethod === 'cash' ? 'Cash on delivery' : 'Online payment'}</p><p>Delivering to {order.address?.['full-name']}, {order.address?.city}</p><ul>{order.items.map((item) => <li key={item.id}>{item.title} × {item.qty}</li>)}</ul><strong>{formatPrice(order.total)}</strong></article>)}</div> : <div className="shop-empty">No orders yet. <Link to="/products">Explore products</Link></div>}</section>;
+  const validOrders = Array.isArray(orders) ? orders.filter(Boolean) : [];
+  const sortedOrders = [...validOrders].sort((a, b) =>
+    (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0),
+  );
+
+  return <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Purchases</p><h1>Orders</h1><p>Your orders are saved with the store and shown with the newest first.</p><nav className="account-links"><Link to="/addresses">Manage addresses</Link><Link to="/change-password">Change password</Link></nav></div>{!user ? <div className="shop-empty">Sign in to view your orders. <Link to="/login">Sign in</Link></div> : !authReady ? <div className="shop-empty">Loading your orders...</div> : sortedOrders.length ? <div className="order-list">{sortedOrders.map((order) => <article className="order-entry" key={order.id}><div className="order-entry-heading"><div><p className="shop-eyebrow">Order {order.id}</p><h2>{new Date(order.createdAt || Date.now()).toLocaleDateString()}</h2></div><span className="order-status">{order.status || 'Processing'}</span></div><p>{(order.items || []).reduce((sum, item) => sum + (Number(item.qty) || 0), 0)} items · {order.paymentMethod === 'cash' ? 'Cash on delivery' : 'Online payment'}</p><p>Delivering to {order.address?.['full-name'] || 'your address'}, {order.address?.city || ''}</p><ul>{(order.items || []).map((item) => <li key={item.id}>{item.title || 'Item'} × {item.qty || 1} — {formatPrice((Number(item.price) || 0) * (Number(item.qty) || 1))}</li>)}</ul>{order.shipping > 0 && <p className="summary-row"><span>Items subtotal</span><strong>{formatPrice(order.subtotal)}</strong></p>}{order.shipping > 0 && <p className="summary-row"><span>Shipping</span><strong>{formatPrice(order.shipping)}</strong></p>}{order.tax > 0 && <p className="summary-row"><span>Tax</span><strong>{formatPrice(order.tax)}</strong></p>}<p className="summary-total"><span>Total</span><strong>{formatPrice(order.total || 0)}</strong></p></article>)}</div> : <div className="shop-empty">No orders yet. <Link to="/products">Explore products</Link></div>}</section>;
 }
 
 export function ProductDetailsPage() {

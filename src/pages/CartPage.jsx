@@ -13,7 +13,7 @@ export default function CartPage() {
   const [couponBusy, setCouponBusy] = useState(false);
 
 
-  const calculatedTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const calculatedTotal = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
   const subtotal = cartTotal || calculatedTotal;
   const total = cartTotalAfterDiscount > 0 && cartTotalAfterDiscount < subtotal
     ? cartTotalAfterDiscount
@@ -52,14 +52,14 @@ export default function CartPage() {
             className="flex items-center gap-4 rounded-lg border bg-white p-4 shadow-sm"
           >
             <img
-              src={i.image}
+              src={i.image || 'https://via.placeholder.com/150'}
               alt={i.title}
               className="h-16 w-16 rounded-md object-cover"
             />
 
             <div className="flex-1">
               <p className="font-medium">{i.title}</p>
-              <p className="text-gray-500">${i.price.toFixed(2)}</p>
+              <p className="text-gray-500">${(Number(i.price) || 0).toFixed(2)}</p>
             </div>
 
             <div className="flex flex-col gap-2">

@@ -21,6 +21,18 @@ async function loadCollection(endpoint) {
   return [firstPage, ...remainingPages].flatMap(records);
 }
 
+export function parsePrice(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^\d.-]+/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return 0;
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function normalizeProduct(product) {
   const category = product.category?.name || product.category || '';
   const brand = product.brand?.name || product.brand || '';
@@ -28,7 +40,7 @@ export function normalizeProduct(product) {
     ...product,
     id: String(product._id || product.id),
     title: product.title || product.name || 'Untitled product',
-    price: Number(product.price || 0),
+    price: parsePrice(product.price),
     category,
     categoryId: product.category?._id || '',
     brand,
@@ -164,7 +176,7 @@ export async function loadClothingReviews() {
   });
 }
 
-export const formatPrice = (price) => `$${Number(price || 0).toFixed(2)}`;
+export const formatPrice = (price) => `$${parsePrice(price).toFixed(2)}`;
 
 export const slugify = (value) => String(value || '')
   .toLowerCase()
