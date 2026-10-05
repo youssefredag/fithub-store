@@ -174,7 +174,7 @@ export function CatalogPage({ mode = 'products' }) {
 
 export function WishlistPage() {
   const { wishlist, user, authReady } = useCart();
-  return <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Saved</p><h1>Wishlist</h1><p>{wishlist.length} saved {wishlist.length === 1 ? 'item' : 'items'}.</p></div>{!user ? <div className="shop-empty">Sign in to view your saved products. <Link to="/login">Sign in</Link></div> : !authReady ? <div className="shop-empty">Loading your wishlist...</div> : <ProductGrid products={wishlist} />}</section>;
+  return <section className="shop-page"><div className="shop-page-heading"><p className="shop-eyebrow">Your account / Saved</p><h1>Wishlist</h1><p>{wishlist.length} saved {wishlist.length === 1 ? 'item' : 'items'}.</p></div>{user && !authReady ? <div className="shop-empty">Loading your wishlist...</div> : <ProductGrid products={wishlist} />}</section>;
 }
 
 export function ProfilePage() {

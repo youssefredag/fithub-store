@@ -6,6 +6,7 @@ import { normalizeProduct, parsePrice } from '../services/catalog';
 
 const CartContext = createContext();
 const GUEST_CART_STORAGE_KEY = 'fithub-guest-cart';
+const GUEST_WISHLIST_STORAGE_KEY = 'fithub-guest-wishlist';
 
 function readStorage(key, fallback) {
   try {
@@ -24,6 +25,16 @@ function readGuestCart() {
     const qty = Math.floor(Number(item?.qty || 1));
     if (!id || !Number.isFinite(qty) || qty < 1) return [];
     return [{ ...normalizeProduct(item), id: String(id), qty }];
+  });
+}
+
+function readGuestWishlist() {
+  const storedItems = readStorage(GUEST_WISHLIST_STORAGE_KEY, []);
+  if (!Array.isArray(storedItems)) return [];
+  return storedItems.flatMap((item) => {
+    const id = item?._id || item?.id;
+    if (!id) return [];
+    return [{ ...normalizeProduct(item), id: String(id) }];
   });
 }
 
@@ -167,7 +178,9 @@ export function CartProvider({ children }) {
   const [items, setItems] = useState(() =>
     readStorage('fithub-user', null)?.token ? [] : readGuestCart(),
   );
-  const [wishlist, setWishlist] = useState([]);
+  const [wishlist, setWishlist] = useState(() =>
+    readStorage('fithub-user', null)?.token ? [] : readGuestWishlist(),
+  );
   const [cartId, setCartId] = useState('');
   const [cartTotal, setCartTotal] = useState(0);
   const [cartTotalAfterDiscount, setCartTotalAfterDiscount] = useState(0);
@@ -195,7 +208,7 @@ export function CartProvider({ children }) {
     if (!user?.token) {
       setAuthReady(true);
       setItems(readGuestCart());
-      setWishlist([]);
+      setWishlist(readGuestWishlist());
       setCartId('');
       setCartTotal(0);
       setCartTotalAfterDiscount(0);
@@ -277,8 +290,30 @@ export function CartProvider({ children }) {
           setAppliedCoupon(cart.coupon);
         } else setApiError(cartResult.reason.message || 'Could not load your cart.');
 
-        if (wishlistResult.status === 'fulfilled') setWishlist(unwrapWishlist(wishlistResult.value));
-        else setApiError(wishlistResult.reason.message || 'Could not load your wishlist.');
+        if (wishlistResult.status === 'fulfilled') {
+          let accountWishlist = unwrapWishlist(wishlistResult.value);
+          const guestWishlist = readGuestWishlist();
+          try {
+            const accountWishlistIds = new Set(accountWishlist.map((item) => item.id));
+            for (const item of guestWishlist) {
+              if (accountWishlistIds.has(item.id)) continue;
+              await apiRequest('/wishlist', {
+                method: 'POST',
+                token: user.token,
+                body: jsonBody({ productId: item.id }),
+              });
+            }
+            if (guestWishlist.length) {
+              const refreshedWishlist = await apiRequest('/wishlist', { token: user.token });
+              accountWishlist = unwrapWishlist(refreshedWishlist);
+              localStorage.removeItem(GUEST_WISHLIST_STORAGE_KEY);
+            }
+            setWishlist(accountWishlist);
+          } catch (error) {
+            setApiError(error.message || 'Could not sync your saved products.');
+            setWishlist(accountWishlist);
+          }
+        } else setApiError(wishlistResult.reason.message || 'Could not load your wishlist.');
 
         if (addressResult.status === 'fulfilled') setAddresses(unwrapAddresses(addressResult.value).map(normalizeAddress));
         else setApiError(addressResult.reason.message || 'Could not load your saved addresses.');
@@ -459,13 +494,26 @@ export function CartProvider({ children }) {
   }
 
   async function toggleWishlist(product) {
-    if (!requireAccount()) return null;
-    const exists = wishlist.some((item) => item.id === String(product.id));
+    const productId = String(product?._id || product?.id || '');
+    if (!productId) {
+      setApiError('This product cannot be saved because it has no product ID.');
+      return null;
+    }
+    const exists = wishlist.some((item) => item.id === productId);
+    if (!user?.token) {
+      const nextWishlist = exists
+        ? wishlist.filter((item) => item.id !== productId)
+        : [...wishlist, { ...normalizeProduct(product), id: productId }];
+      setWishlist(nextWishlist);
+      localStorage.setItem(GUEST_WISHLIST_STORAGE_KEY, JSON.stringify(nextWishlist));
+      setApiError('');
+      return true;
+    }
     return reportRequest(async () => {
-      await apiRequest(exists ? `/wishlist/${encodeURIComponent(product.id)}` : '/wishlist', {
+      await apiRequest(exists ? `/wishlist/${encodeURIComponent(productId)}` : '/wishlist', {
         method: exists ? 'DELETE' : 'POST',
         token: user.token,
-        ...(exists ? {} : { body: jsonBody({ productId: product.id }) }),
+        ...(exists ? {} : { body: jsonBody({ productId }) }),
       });
       const result = await apiRequest('/wishlist', { token: user.token });
       setWishlist(unwrapWishlist(result));
@@ -657,6 +705,10 @@ export function CartProvider({ children }) {
   useEffect(() => {
     if (!user?.token) localStorage.setItem(GUEST_CART_STORAGE_KEY, JSON.stringify(items));
   }, [items, user]);
+
+  useEffect(() => {
+    if (!user?.token) localStorage.setItem(GUEST_WISHLIST_STORAGE_KEY, JSON.stringify(wishlist));
+  }, [wishlist, user]);
 
   return (
     <CartContext.Provider value={{
